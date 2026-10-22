@@ -8,7 +8,7 @@ services:
     name: basak-rozet
     runtime: node
     region: frankfurt            # Türkiye'ye en yakın bölge
-    plan: starter
+    plan: 0.5c-512mb
     buildCommand: npm ci --include=dev --prefix server && npm ci --include=dev --prefix web && npm run build --prefix web
     startCommand: cd server && node --max-old-space-size=384 --import tsx src/index.ts
     healthCheckPath: /api/health
@@ -32,5 +32,5 @@ databases:
   - name: basak-rozet-db
     databaseName: basak_rozet
     region: frankfurt
-    plan: basic-256mb
+    plan: 0.1c-256mb
     postgresMajorVersion: "17"
