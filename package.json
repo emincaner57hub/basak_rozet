@@ -1,0 +1,14 @@
+{
+  "name": "rozet-erp",
+  "private": true,
+  "description": "RozetERP — rozet ithalatı, kafelere toptan satış, sipariş, irsaliye, fatura ve maliyet",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "install:all": "npm ci --prefix server && npm ci --prefix web",
+    "build": "npm run build --prefix web",
+    "start": "npm start --prefix server",
+    "dev:server": "npm run dev --prefix server",
+    "dev:web": "npm run dev --prefix web",
+    "test": "npm test --prefix server && npm run typecheck --prefix server"
+  }
+}

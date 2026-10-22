@@ -1,0 +1,36 @@
+# Render Blueprint — Başak Rozet
+# Render panelinde: New → Blueprint → bu repoyu seçin. Web servisi ve ayrı bir PostgreSQL
+# veritabanı birlikte oluşturulur. Kurulumda ADMIN_EMAIL ve ADMIN_PASSWORD sorulur: ilk
+# yönetici bu bilgilerle açılır (giriş yaptıktan sonra Ayarlar'dan şifreyi değiştirebilirsiniz).
+
+services:
+  - type: web
+    name: basak-rozet
+    runtime: node
+    region: frankfurt            # Türkiye'ye en yakın bölge
+    plan: starter
+    buildCommand: npm ci --include=dev --prefix server && npm ci --include=dev --prefix web && npm run build --prefix web
+    startCommand: cd server && node --max-old-space-size=384 --import tsx src/index.ts
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: basak-rozet-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_EMAIL           # ilk yöneticinin e-postası
+        sync: false
+      - key: ADMIN_PASSWORD        # ilk yöneticinin şifresi (en az 8 karakter)
+        sync: false
+
+databases:
+  - name: basak-rozet-db
+    databaseName: basak_rozet
+    region: frankfurt
+    plan: basic-256mb
+    postgresMajorVersion: "17"

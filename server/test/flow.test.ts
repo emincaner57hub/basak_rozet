@@ -1,0 +1,228 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import ExcelJS from 'exceljs';
+import { openDb, type Db } from '../src/db.js';
+import { buildApp } from '../src/app.js';
+import { ensureAdmin } from '../src/auth.js';
+
+describe('Başak Rozet akışı', () => {
+  let db: Db;
+  let app: ReturnType<typeof buildApp>;
+  let cookie = '';
+  let clock = new Date('2026-10-22T09:00:00Z');
+  beforeEach(async () => {
+    db = await openDb();
+    clock = new Date('2026-10-22T09:00:00Z');
+    await ensureAdmin(db, 'a@b.c', 'sifre1234');
+    app = buildApp({ db, sessionSecret: 'test', now: () => clock });
+    await app.ready();
+    const r = await app.inject({ method: 'POST', url: '/api/login', payload: { email: 'a@b.c', password: 'sifre1234' } });
+    cookie = r.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+  });
+  afterEach(async () => {
+    await app.close();
+    await db.close();
+  });
+  const req = async <T = any>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, payload?: object): Promise<T> => {
+    const r = await app.inject({ method, url, payload, headers: { cookie } });
+    if (r.statusCode >= 400) throw Object.assign(new Error(r.body), { status: r.statusCode });
+    return r.json() as T;
+  };
+
+  async function setup() {
+    const chain = await req('POST', '/api/customers', { code: 'KD', name: 'Kahve Durağı', kind: 'chain', taxId: '1234567890', paymentDays: 30 });
+    const moda = await req('POST', '/api/customers', { code: 'KD-1', name: 'Moda', kind: 'branch', parentId: chain.id, billTo: 'parent' });
+    const izmir = await req('POST', '/api/customers', { code: 'KD-2', name: 'İzmir', kind: 'branch', parentId: chain.id, billTo: 'self', taxId: '9876543210', paymentDays: 10 });
+    const solo = await req('POST', '/api/customers', { code: 'LIM', name: 'Limon Kafe', kind: 'single', taxId: '11111111111', paymentDays: 7 });
+    const a = await req('POST', '/api/products', { code: 'R-1', name: 'Kedi', listPrice: 6000 });
+    const b = await req('POST', '/api/products', { code: 'R-2', name: 'Kalp', listPrice: 5000 });
+    const logo = await req('POST', '/api/products', { code: 'KD-L', name: 'Logolu', listPrice: 7000, chainId: chain.id });
+    const stand = await req('POST', '/api/products', { code: 'STAND', name: 'Stand', kind: 'promo' });
+    return { chain, moda, izmir, solo, a, b, logo, stand };
+  }
+
+  it('giriş olmadan API kapalı', async () => {
+    const r = await app.inject({ method: 'GET', url: '/api/customers' });
+    expect(r.statusCode).toBe(401);
+  });
+
+  it('müşteri ağacı, özel fiyat ve zincire özel ürün', async () => {
+    const s = await setup();
+    await expect(req('POST', '/api/customers', { name: 'Yetim şube', kind: 'branch' })).rejects.toMatchObject({ status: 400 });
+    await expect(req('POST', '/api/customers', { name: 'X', kind: 'branch', parentId: s.solo.id })).rejects.toMatchObject({ status: 400 });
+    await req('PUT', `/api/customers/${s.chain.id}/prices/${s.a.id}`, { price: 5500 });
+    const cat = await req('GET', `/api/customers/${s.moda.id}/catalog`);
+    expect(cat.find((p: any) => p.code === 'R-1')).toMatchObject({ price: 5500, special: true });
+    expect(cat.find((p: any) => p.code === 'KD-L')).toBeTruthy();
+    // Şubeye özel fiyat zincirinkinden önce gelir
+    await req('PUT', `/api/customers/${s.moda.id}/prices/${s.a.id}`, { price: 5200 });
+    expect((await req('GET', `/api/customers/${s.moda.id}/catalog`)).find((p: any) => p.code === 'R-1').price).toBe(5200);
+    expect((await req('GET', `/api/customers/${s.izmir.id}/catalog`)).find((p: any) => p.code === 'R-1').price).toBe(5500);
+    // Başka müşteri zincire özel ürünü görmez
+    expect((await req('GET', `/api/customers/${s.solo.id}/catalog`)).find((p: any) => p.code === 'KD-L')).toBeUndefined();
+    await expect(req('POST', '/api/orders', { customerId: s.solo.id, date: '2026-10-22', lines: [{ productId: s.logo.id, qty: 5 }] })).rejects.toMatchObject({ status: 400 });
+    // Siparişi zincirin kendisine girmek yasak (sevk adresi şubedir)
+    await expect(req('POST', '/api/orders', { customerId: s.chain.id, date: '2026-10-22', lines: [{ productId: s.a.id, qty: 5 }] })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('parti maliyeti: kur, masraf dağıtımı, ithalat KDV hariç; sonradan gelen masraf satılanın maliyetini de günceller', async () => {
+    const s = await setup();
+    const lot = await req('POST', '/api/lots', {
+      date: '2026-09-01', currency: 'USD', fxRate: 30, allocation: 'value',
+      lines: [
+        { productId: s.a.id, qty: 100, unitPriceFx: 1 }, // 3.000 ₺
+        { productId: s.b.id, qty: 100, unitPriceFx: 0.5 }, // 1.500 ₺
+      ],
+      costs: [
+        { type: 'customs_duty', amount: 90000 }, // 900 ₺
+        { type: 'import_vat', amount: 50000 }, // maliyete girmez
+      ],
+    });
+    let d = await req('GET', `/api/lots/${lot.id}`);
+    expect(d.totals).toMatchObject({ goods: 450000, extra: 90000, importVat: 50000, landed: 540000, qty: 200 });
+    expect(d.lines[0].unitCost).toBeCloseTo(3600); // (3000 + 600) / 100 ₺ → kuruş
+    expect(d.lines[1].unitCost).toBeCloseTo(1800);
+    let prods = await req('GET', '/api/products');
+    expect(prods.find((p: any) => p.code === 'R-1')).toMatchObject({ onHand: 0, onOrder: 100 });
+
+    await req('POST', `/api/lots/${lot.id}/receive`, { date: '2026-09-10' });
+    prods = await req('GET', '/api/products');
+    expect(prods.find((p: any) => p.code === 'R-1')).toMatchObject({ onHand: 100, onOrder: 0, avgCost: 3600 });
+
+    const ds = await req('POST', '/api/dispatches', { date: '2026-09-15', customerId: s.solo.id, lines: [{ productId: s.a.id, qty: 10 }] });
+    let det = await req('GET', `/api/dispatches/${ds.id}`);
+    expect(det.lines[0]).toMatchObject({ unitPrice: 6000, unitCost: 3600 });
+
+    // Broker faturası sonradan: 600 ₺ daha → R-1 birim maliyeti 3.600 + 400 = 4.000
+    await req('PUT', `/api/lots/${lot.id}`, {
+      date: '2026-09-01', currency: 'USD', fxRate: 30, allocation: 'value',
+      lines: [
+        { productId: s.a.id, qty: 100, unitPriceFx: 1 },
+        { productId: s.b.id, qty: 100, unitPriceFx: 0.5 },
+      ],
+      costs: [{ type: 'customs_duty', amount: 90000 }, { type: 'broker', amount: 60000 }],
+    });
+    det = await req('GET', `/api/dispatches/${ds.id}`);
+    expect(det.lines[0].unitCost).toBeCloseTo(4000);
+    prods = await req('GET', '/api/products');
+    expect(prods.find((p: any) => p.code === 'R-1')).toMatchObject({ onHand: 90 });
+    expect(prods.find((p: any) => p.code === 'R-1').avgCost).toBeCloseTo(4000);
+
+    // Teslim alınmış parti silinemez; sayım farkı
+    await expect(req('DELETE', `/api/lots/${lot.id}`)).rejects.toMatchObject({ status: 400 });
+    expect((await req('POST', `/api/products/${s.a.id}/adjust`, { date: '2026-09-20', counted: 88 })).delta).toBe(-2);
+    expect((await req('GET', `/api/products/${s.a.id}/moves`))[0]).toMatchObject({ kind: 'adjust', qty: -2, balance: 88 });
+  });
+
+  it('sipariş → kısmi sevk + promosyon → fatura merkeze; franchise kendi faturası; tahsilat FIFO ve vade', async () => {
+    const s = await setup();
+    await req('POST', `/api/products/${s.a.id}/adjust`, { date: '2026-10-01', qty: 500, unitCost: 2000 });
+    await req('POST', `/api/products/${s.b.id}/adjust`, { date: '2026-10-01', qty: 500, unitCost: 1500 });
+    await req('POST', `/api/products/${s.stand.id}/adjust`, { date: '2026-10-01', qty: 10, unitCost: 15000 });
+
+    const o = await req('POST', '/api/orders', { customerId: s.moda.id, date: '2026-10-02', channel: 'whatsapp', lines: [{ productId: s.a.id, qty: 100 }, { productId: s.b.id, qty: 50 }] });
+    let od = await req('GET', `/api/orders/${o.id}`);
+    expect(od).toMatchObject({ status: 'open', total: 100 * 6000 + 50 * 5000 });
+    const [la, lb] = od.lines;
+    await expect(
+      req('POST', '/api/dispatches', { date: '2026-10-03', customerId: s.moda.id, orderId: o.id, lines: [{ productId: s.a.id, qty: 101, orderLineId: la.id }] }),
+    ).rejects.toMatchObject({ status: 400 });
+    const d1 = await req('POST', '/api/dispatches', {
+      date: '2026-10-03', customerId: s.moda.id, orderId: o.id,
+      lines: [{ productId: s.a.id, qty: 100, orderLineId: la.id }, { productId: s.b.id, qty: 20, orderLineId: lb.id }, { productId: s.stand.id, qty: 1 }],
+    });
+    od = await req('GET', `/api/orders/${o.id}`);
+    expect(od.status).toBe('partial');
+    expect(od.lines[1]).toMatchObject({ shipped: 20, remaining: 30 });
+    const dd = await req('GET', `/api/dispatches/${d1.id}`);
+    expect(dd).toMatchObject({ billToId: s.chain.id, total: 100 * 6000 + 20 * 5000 });
+    expect(dd.lines.find((l: any) => l.isPromo)).toMatchObject({ unitPrice: 0, unitCost: 15000 });
+
+    // Faturayı şubeye kesmek yasak; zincire kesilir, promosyon faturaya girmez
+    await expect(req('POST', '/api/invoices', { customerId: s.moda.id, date: '2026-10-05', dispatchIds: [d1.id] })).rejects.toMatchObject({ status: 400 });
+    expect((await req('GET', '/api/invoices/pending'))[0]).toMatchObject({ customerId: s.chain.id, dispatchCount: 1 });
+    const inv = await req('POST', '/api/invoices', { customerId: s.chain.id, date: '2026-10-05', dispatchIds: [d1.id] });
+    const id = await req('GET', `/api/invoices/${inv.id}`);
+    expect(id).toMatchObject({ subtotal: 700000, vatTotal: 140000, total: 840000, dueDate: '2026-11-04', status: 'open' });
+    expect(id.lines).toHaveLength(2);
+    await expect(req('POST', `/api/dispatches/${d1.id}/cancel`)).rejects.toMatchObject({ status: 400 });
+
+    // Kalan sevk → sipariş tamamlanır
+    await req('POST', '/api/dispatches', { date: '2026-10-06', customerId: s.moda.id, orderId: o.id, lines: [{ productId: s.b.id, qty: 30, orderLineId: lb.id }] });
+    expect((await req('GET', `/api/orders/${o.id}`)).status).toBe('shipped');
+
+    // Franchise kendi carisi
+    const d3 = await req('POST', '/api/dispatches', { date: '2026-10-06', customerId: s.izmir.id, lines: [{ productId: s.a.id, qty: 10 }] });
+    expect((await req('GET', `/api/dispatches/${d3.id}`)).billToId).toBe(s.izmir.id);
+    const inv2 = await req('POST', '/api/invoices', { customerId: s.izmir.id, date: '2026-10-06', dispatchIds: [d3.id] });
+    expect(inv2.total).toBe(72000);
+    await expect(req('POST', '/api/payments', { customerId: s.moda.id, date: '2026-10-10', amount: 1000 })).rejects.toMatchObject({ status: 400 });
+
+    // Tahsilat: 500.000 → fatura kısmi; vade geçince gecikmiş
+    await req('POST', '/api/payments', { customerId: s.chain.id, date: '2026-10-10', amount: 500000, reference: 'EFT' });
+    let list = await req('GET', `/api/invoices?customerId=${s.chain.id}`);
+    expect(list[0]).toMatchObject({ paid: 500000, remaining: 340000, status: 'partial', daysOverdue: 0 });
+    clock = new Date('2026-11-20T09:00:00Z');
+    const r = await app.inject({ method: 'POST', url: '/api/login', payload: { email: 'a@b.c', password: 'sifre1234' } });
+    cookie = r.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+    list = await req('GET', '/api/invoices?status=overdue');
+    expect(list).toHaveLength(2);
+    expect(list.find((x: any) => x.id === inv.id).daysOverdue).toBe(16);
+    const rec = await req('GET', '/api/reports/receivables');
+    expect(rec.find((r: any) => r.id === s.chain.id)).toMatchObject({ balance: 340000, d30: 340000, overdue: 340000 });
+    const st = await req('GET', `/api/customers/${s.chain.id}/statement`);
+    expect(st.rows.map((r: any) => r.balance)).toEqual([840000, 340000]);
+
+    // Kârlılık: zincir = Moda; promosyon maliyeti düşülür
+    const pr = await req('GET', '/api/reports/profitability?from=2026-10-01&to=2026-10-31');
+    const kd = pr.rows.find((r: any) => r.id === s.chain.id);
+    expect(kd.branches.find((b: any) => b.id === s.moda.id)).toMatchObject({ revenue: 850000, cogs: 100 * 2000 + 50 * 1500, promo: 15000 });
+    expect(kd.revenue).toBe(850000 + 60000);
+
+    // Fatura iptali irsaliyeleri serbest bırakır
+    await req('POST', `/api/invoices/${inv.id}/cancel`);
+    expect((await req('GET', `/api/dispatches/${d1.id}`)).invoiceId).toBeNull();
+  });
+
+  it('Excel: geniş tablo (şube × ürün) ve uzun liste; şablon geri okunur', async () => {
+    const s = await setup();
+    const tpl = await app.inject({ method: 'GET', url: `/api/orders/template?chainId=${s.chain.id}`, headers: { cookie } });
+    expect(tpl.statusCode).toBe(200);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(tpl.rawPayload as unknown as ArrayBuffer);
+    const ws = wb.getWorksheet('Sipariş')!;
+
+    expect((ws.getRow(1).values as unknown[]).slice(1)).toEqual(['Şube kodu', 'Şube', 'KD-L', 'R-1', 'R-2']);
+    // Doldur: Moda 10 × R-1, İzmir 5 × KD-L + 3 × R-2
+    const rowOf = (code: string) => [2, 3].find((r) => ws.getRow(r).getCell(1).value === code)!;
+    ws.getRow(rowOf('KD-1')).getCell(4).value = 10;
+    ws.getRow(rowOf('KD-2')).getCell(3).value = 5;
+    ws.getRow(rowOf('KD-2')).getCell(5).value = 3;
+    const data = Buffer.from(await wb.xlsx.writeBuffer()).toString('base64');
+    const prev = await req('POST', '/api/orders/import/preview', { data, chainId: s.chain.id });
+    expect(prev.format).toBe('wide');
+    expect(prev.errors).toEqual([]);
+    expect(prev.orders.map((o: any) => [o.customerName, o.lines.map((l: any) => `${l.code}:${l.qty}`).join(',')])).toEqual([
+      ['Kahve Durağı · İzmir', 'KD-L:5,R-2:3'],
+      ['Kahve Durağı · Moda', 'R-1:10'],
+    ]);
+    const done = await req('POST', '/api/orders/import', { data, chainId: s.chain.id, date: '2026-10-22' });
+    expect(done.orders).toHaveLength(2);
+    const orders = await req('GET', '/api/orders');
+    expect(orders.filter((o: any) => o.channel === 'excel')).toHaveLength(2);
+
+    // Uzun liste: müşteri adı + ürün + adet; bilinmeyenler hata olarak listelenir
+    const wb2 = new ExcelJS.Workbook();
+    const w2 = wb2.addWorksheet('a');
+    w2.addRow(['Şube', 'Ürün kodu', 'Adet']);
+    w2.addRow(['Moda', 'R-2', 7]);
+    w2.addRow(['Limon Kafe', 'R-1', 4]);
+    w2.addRow(['Yok Kafe', 'R-1', 1]);
+    w2.addRow(['Moda', 'X-99', 2]);
+    const d2 = Buffer.from(await wb2.xlsx.writeBuffer()).toString('base64');
+    const p2 = await req('POST', '/api/orders/import/preview', { data: d2 });
+    expect(p2.format).toBe('long');
+    expect(p2.orders).toHaveLength(2);
+    expect(p2.errors.map((e: any) => e.row)).toEqual([4, 5]);
+    await expect(req('POST', '/api/orders/import', { data: d2 })).rejects.toMatchObject({ status: 400 });
+  });
+});
