@@ -10,7 +10,7 @@ const KEYS = ['companyName', 'companyLegalName', 'companyTaxId', 'companyTaxOffi
 export function registerSettings(app: FastifyInstance, { db }: { db: Db }) {
   app.get('/api/settings', async () => {
     const out: Record<string, string> = {};
-    for (const k of KEYS) out[k] = await getSetting(db, `s_${k}`, k === 'companyName' ? 'Başak Rozet' : '');
+    for (const k of KEYS) out[k] = await getSetting(db, `s_${k}`, k === 'companyName' ? 'Badi' : '');
     return out;
   });
   app.put('/api/settings', async (req) => {

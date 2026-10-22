@@ -65,26 +65,33 @@ const Box = ({ title, children }: { title: string; children: ReactNode }) => (
 
 export function PrintDispatch({ id }: { id: number }) {
   const { data: d } = useLoad(() => api.dispatch(id), [id]);
-  if (!d) return null;
+  const { data: me } = useLoad(() => api.settings(), []);
+  if (!d || !me) return null;
+  const firm = d.billToLegalName ?? d.chainName ?? d.billToName;
+  const total = d.lines.reduce((s, l) => s + l.qty, 0);
   return (
     <Sheet title="SEVK İRSALİYESİ" no={d.no} date={d.date} ready>
       <div className="mb-4 grid grid-cols-2 gap-3">
-        <Box title="Teslim yeri">
-          <div className="font-semibold">{d.chainName ? `${d.chainName} · ${d.customerName}` : d.customerName}</div>
-          <div>{[d.customerAddress, d.customerCity].filter(Boolean).join(', ')}</div>
-          <div>{[d.customerContact, d.customerPhone].filter(Boolean).join(' · ')}</div>
-        </Box>
-        <Box title="Alıcı (fatura)">
-          <div className="font-semibold">{d.billToLegalName ?? d.billToName}</div>
-          <div>{[d.billToAddress, d.billToCity].filter(Boolean).join(', ')}</div>
+        <Box title="Teslim edilen firma">
+          <div className="font-semibold">{firm}</div>
+          {d.chainName && (
+            <div>
+              Şube: <b>{d.customerName}</b>
+            </div>
+          )}
+          {!d.chainName && d.customerLegalName && d.customerLegalName !== firm && <div>{d.customerName}</div>}
           {d.billToTaxId && (
             <div>
-              {d.billToTaxOffice} VD · {d.billToTaxId}
+              {d.billToTaxOffice ? `${d.billToTaxOffice} VD · ` : ''}VKN {d.billToTaxId}
             </div>
           )}
         </Box>
+        <Box title="Teslim adresi">
+          <div>{[d.customerAddress, d.customerCity].filter(Boolean).join(', ') || '—'}</div>
+          {(d.customerContact || d.customerPhone) && <div>{[d.customerContact, d.customerPhone].filter(Boolean).join(' · ')}</div>}
+        </Box>
       </div>
-      <div className="mb-3 flex gap-6">
+      <div className="mb-3 flex flex-wrap gap-x-6 gap-y-1">
         <span>Sevk tarihi: {trDate(d.date)}</span>
         {d.orderNo && <span>Sipariş: {d.orderNo}</span>}
         {d.customerRef && <span>Müşteri ref: {d.customerRef}</span>}
@@ -94,35 +101,62 @@ export function PrintDispatch({ id }: { id: number }) {
       <table className="w-full border-collapse">
         <thead>
           <tr className="border-y border-black text-left">
-            <th className="py-1">#</th>
-            <th className="py-1">Kod</th>
-            <th className="py-1">Açıklama</th>
-            <th className="py-1 text-right">Miktar</th>
-            <th className="py-1 pl-2">Birim</th>
+            <th className="w-8 py-1">#</th>
+            <th className="w-28 py-1">Kod</th>
+            <th className="py-1">Ürün</th>
+            <th className="w-20 py-1 text-right">Miktar</th>
+            <th className="w-14 py-1 pl-2">Birim</th>
           </tr>
         </thead>
         <tbody>
           {d.lines.map((l, i) => (
             <tr key={l.id} className="border-b border-black/20">
-              <td className="py-1">{i + 1}</td>
-              <td className="py-1">{l.code}</td>
-              <td className="py-1">
+              <td className="py-1.5">{i + 1}</td>
+              <td className="py-1.5">{l.code}</td>
+              <td className="py-1.5">
                 {l.name}
-                {l.isPromo && ' (promosyon, bedelsiz)'}
+                {l.isPromo && ' (bedelsiz)'}
               </td>
-              <td className="py-1 text-right">{fmtNum(l.qty)}</td>
-              <td className="py-1 pl-2">{l.unit}</td>
+              <td className="py-1.5 text-right font-semibold">{fmtNum(l.qty)}</td>
+              <td className="py-1.5 pl-2">{l.unit}</td>
             </tr>
           ))}
         </tbody>
+        <tfoot>
+          <tr className="border-t border-black">
+            <td colSpan={3} className="py-1.5 text-right">
+              Toplam
+            </td>
+            <td className="py-1.5 text-right font-bold">{fmtNum(total)}</td>
+            <td className="py-1.5 pl-2">adet</td>
+          </tr>
+        </tfoot>
       </table>
-      <div className="mt-2 text-right">Toplam: {fmtNum(d.lines.reduce((s, l) => s + l.qty, 0))} adet</div>
       {d.note && <div className="mt-3">Not: {d.note}</div>}
-      <div className="mt-16 grid grid-cols-2 gap-10 text-center">
-        <div className="border-t border-black pt-1">Teslim eden</div>
-        <div className="border-t border-black pt-1">Teslim alan (ad, imza)</div>
+      <p className="mt-6 text-[11px]">Yukarıda yazılı ürünler eksiksiz ve hasarsız teslim edilmiş / teslim alınmıştır.</p>
+      <div className="mt-3 grid grid-cols-2 gap-6">
+        <Signature title="Teslim eden" firm={me.companyLegalName || me.companyName} />
+        <Signature title="Teslim alan" firm={d.chainName ? `${firm} · ${d.customerName}` : firm} />
       </div>
     </Sheet>
+  );
+}
+
+function Signature({ title, firm }: { title: string; firm: string }) {
+  const line = (label: string) => (
+    <div className="flex items-end gap-2 pt-5">
+      <span className="w-16 shrink-0">{label}</span>
+      <span className="flex-1 border-b border-dotted border-black" />
+    </div>
+  );
+  return (
+    <div className="rounded border border-black/60 p-3">
+      <div className="text-[13px] font-bold uppercase tracking-wide">{title}</div>
+      <div className="mt-0.5">{firm}</div>
+      {line('Ad Soyad')}
+      {line('Tarih')}
+      {line('İmza')}
+    </div>
   );
 }
 

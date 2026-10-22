@@ -19,8 +19,8 @@ export function SettingsPage() {
 }
 
 const FIELDS: [keyof Settings, string, boolean?][] = [
-  ['companyName', 'Görünen ad'],
-  ['companyLegalName', 'Ticari ünvan'],
+  ['companyName', 'Firma adı (kısa)'],
+  ['companyLegalName', 'Tam firma ünvanı'],
   ['companyTaxOffice', 'Vergi dairesi'],
   ['companyTaxId', 'Vergi no / TCKN'],
   ['companyAddress', 'Adres', true],
@@ -39,7 +39,7 @@ function CompanyCard() {
   return (
     <div className="card p-5">
       <h2 className="mb-1 font-semibold">Firma bilgileri</h2>
-      <p className="mb-4 text-xs text-muted">İrsaliye ve fatura çıktılarının başında basılır.</p>
+      <p className="mb-4 text-xs text-muted">İrsaliye ve fatura çıktılarının başında ve “Teslim eden” bölümünde basılır. Bilmediğiniz alanı boş bırakın, sonra doldurursunuz.</p>
       <div className="grid grid-cols-2 gap-3">
         {FIELDS.map(([k, l, wide]) => (
           <Field key={k} label={l} className={wide ? 'col-span-2' : ''}>
