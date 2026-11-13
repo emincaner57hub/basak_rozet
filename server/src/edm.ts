@@ -5,7 +5,7 @@ import type { Db, Queryable } from './db.js';
 import { addDays, getSetting, setSetting, todayTr } from './db.js';
 import { daySchema, fail, idParam, nextNo, type Row } from './lib.js';
 import { EDM_URLS, EdmClient, EdmError, statusTone, type EdmInvoiceHeader, type FetchFn } from './edm/soap.js';
-import { buildUbl, parseUbl, type UblInvoice } from './edm/ubl.js';
+import { buildUbl, parseUbl, type ParsedInvoice, type UblInvoice } from './edm/ubl.js';
 
 /**
  * EDM e-Fatura entegrasyonu:
@@ -29,7 +29,7 @@ interface EdmSettings {
   allowEarchive: boolean;
 }
 
-async function loadSettings(q: Queryable): Promise<EdmSettings> {
+export async function loadSettings(q: Queryable): Promise<EdmSettings> {
   const g = (k: string, d = '') => getSetting(q, `edm_${k}`, d);
   const env = (await g('env', 'test')) === 'prod' ? 'prod' : 'test';
   return {
@@ -44,7 +44,7 @@ async function loadSettings(q: Queryable): Promise<EdmSettings> {
   };
 }
 
-const company = async (q: Queryable) => {
+export const company = async (q: Queryable) => {
   const s = (k: string) => getSetting(q, `s_${k}`, '');
   return {
     name: (await s('companyLegalName')) || (await s('companyName')),
@@ -60,20 +60,102 @@ const company = async (q: Queryable) => {
   };
 };
 
+export async function edmClient(db: Queryable, fetchFn?: FetchFn) {
+  const s = await loadSettings(db);
+  if (!s.enabled) throw fail(400, 'EDM entegrasyonu kapalı. Ayarlar → EDM e-Fatura bölümünden açın.');
+  if (!s.username || !s.password) throw fail(400, 'EDM kullanıcı adı / şifresi girilmemiş (Ayarlar → EDM e-Fatura)');
+  return { s, c: new EdmClient({ url: s.url, username: s.username, password: s.password }, fetchFn) };
+}
+
+export const asEdmError = (e: unknown) => (e instanceof EdmError ? fail(502, e.message) : e);
+
 /** İstanbul saatiyle SS:DD:ss */
 const timeTr = (d: Date) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(d).replace(/^24/, '00');
 
 const asBad = (e: unknown) => (e instanceof EdmError ? fail(502, e.message) : e);
 
+/** UBL'den okunan EDM faturası içe alınabilir mi (TL satış faturası, bizim kestiğimiz) */
+export function checkImportable(p: ParsedInvoice, companyTaxId: string) {
+  if (p.currency !== 'TRY') throw fail(400, `${p.currency} faturası içe alınamaz (yalnız TL)`);
+  if (!['SATIS', 'TEVKIFAT', 'ISTISNA', 'IHRACKAYITLI', ''].includes(p.type)) throw fail(400, `${p.type} tipli fatura içe alınmaz (yalnız satış)`);
+  if (companyTaxId && p.supplierTaxId && p.supplierTaxId !== companyTaxId) throw fail(400, 'Faturayı kesen firma Ayarlar’daki vergi no ile aynı değil');
+  if (p.lines.some((l) => !Number.isInteger(l.qty))) throw fail(400, 'Küsuratlı miktarlı fatura içe alınamaz');
+}
+
+/**
+ * EDM faturasını irsaliyesiz Rozet faturası olarak kaydeder. Müşteri vergi no ile bulunur;
+ * yoksa (createCustomer) tek kafe olarak açılır.
+ */
+export async function importParsedInvoice(
+  db: Db,
+  p: ParsedInvoice,
+  o: { uuid: string; id?: string; status?: string | null; statusDescription?: string | null; companyTaxId: string; today: string; createCustomer?: boolean },
+) {
+  checkImportable(p, o.companyTaxId);
+  return db.tx(async (q) => {
+    const taxId = p.customer.taxId.replace(/\s/g, '');
+    let [cu] = await q.query<{ id: number; payment_days: number }>(
+      "SELECT id, payment_days FROM customers WHERE regexp_replace(tax_id, '\\s', '', 'g') = $1 AND (kind <> 'branch' OR bill_to = 'self') ORDER BY active DESC, id LIMIT 1",
+      [taxId],
+    );
+    let customerCreated = false;
+    if (!cu) {
+      if (o.createCustomer === false) throw fail(400, `${taxId} vergi nolu müşteri Rozet'te yok`);
+      [cu] = await q.query<{ id: number; payment_days: number }>(
+        `INSERT INTO customers(name, kind, legal_name, tax_id, tax_office, address, city, phone, email, note)
+         VALUES ($1,'single',$1,$2,$3,$4,$5,$6,$7,'EDM faturasından açıldı') RETURNING id, payment_days`,
+        [p.customer.name || taxId, taxId, p.customer.taxOffice, p.customer.address, p.customer.city, p.customer.phone, p.customer.email],
+      );
+      customerCreated = true;
+    }
+    const products = await q.query<{ id: number; code: string }>('SELECT id, code FROM products');
+    const byCode = new Map(products.map((x) => [x.code.toLocaleUpperCase('tr'), x.id]));
+    const date = p.issueDate || o.today;
+    const no = await nextNo(q, 'invoices', 'FTR', date);
+    const subtotal = p.lines.reduce((s, l) => s + l.net, 0);
+    const vatTotal = p.lines.reduce((s, l) => s + l.vat, 0);
+    const [{ id }] = await q.query<{ id: number }>(
+      `INSERT INTO invoices(no, date, customer_id, due_date, subtotal, vat_total, total, note, e_invoice_no, e_uuid, e_profile, e_status, e_status_desc, e_source, e_sent_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'edm', now()) RETURNING id`,
+      [
+        no,
+        date,
+        cu.id,
+        addDays(date, cu.payment_days),
+        subtotal,
+        vatTotal,
+        p.total || subtotal + vatTotal,
+        p.notes.filter((n) => !/^Rozet no:/.test(n)).join(' · ').slice(0, 1000) || null,
+        p.id || o.id || null,
+        o.uuid.toUpperCase(),
+        p.profile || null,
+        o.status ?? null,
+        o.statusDescription ?? null,
+      ],
+    );
+    for (const l of p.lines) {
+      const code = l.code ?? l.name.split(/\s+/)[0];
+      const productId = byCode.get(code.toLocaleUpperCase('tr')) ?? null;
+      await q.query(`INSERT INTO invoice_lines(invoice_id, product_id, description, qty, unit_price, vat_rate, net, vat, total) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [
+        id,
+        productId,
+        l.code && !l.name.startsWith(l.code) ? `${l.code} ${l.name}` : l.name,
+        l.qty,
+        l.unitPrice,
+        l.vatRate,
+        l.net,
+        l.vat,
+        l.net + l.vat,
+      ]);
+    }
+    return { id, no, customerCreated };
+  });
+}
+
 export function registerEdm(app: FastifyInstance, { db, now, currentUser, fetchFn }: { db: Db; now: () => Date; currentUser: (req: object) => User; fetchFn?: FetchFn }) {
   const today = () => todayTr(now());
 
-  async function client() {
-    const s = await loadSettings(db);
-    if (!s.enabled) throw fail(400, 'EDM entegrasyonu kapalı. Ayarlar → EDM e-Fatura bölümünden açın.');
-    if (!s.username || !s.password) throw fail(400, 'EDM kullanıcı adı / şifresi girilmemiş (Ayarlar → EDM e-Fatura)');
-    return { s, c: new EdmClient({ url: s.url, username: s.username, password: s.password }, fetchFn) };
-  }
+  const client = () => edmClient(db, fetchFn);
 
   const admin = (req: object) => {
     if (currentUser(req)?.role !== 'admin') throw fail(403, 'Bu işlem için yönetici olmalısınız');
@@ -359,67 +441,7 @@ export function registerEdm(app: FastifyInstance, { db, now, currentUser, fetchF
             if (!full?.content) throw fail(502, "EDM fatura içeriğini vermedi");
             const p = parseUbl(full.content);
             if (p.uuid && p.uuid.toUpperCase() !== it.uuid.toUpperCase()) throw fail(502, "EDM'den gelen fatura ETTN'si uyuşmuyor");
-            if (p.currency !== 'TRY') throw fail(400, `${p.currency} faturası içe alınamaz (yalnız TL)`);
-            if (!['SATIS', 'TEVKIFAT', 'ISTISNA', 'IHRACKAYITLI', ''].includes(p.type)) throw fail(400, `${p.type} tipli fatura içe alınmaz (yalnız satış)`);
-            if (co.taxId && p.supplierTaxId && p.supplierTaxId !== co.taxId) throw fail(400, 'Faturayı kesen firma Ayarlar’daki vergi no ile aynı değil');
-            if (p.lines.some((l) => !Number.isInteger(l.qty))) throw fail(400, 'Küsuratlı miktarlı fatura içe alınamaz');
-            const r = await db.tx(async (q) => {
-              const taxId = p.customer.taxId.replace(/\s/g, '');
-              let [cu] = await q.query<{ id: number; payment_days: number }>(
-                "SELECT id, payment_days FROM customers WHERE regexp_replace(tax_id, '\\s', '', 'g') = $1 AND (kind <> 'branch' OR bill_to = 'self') ORDER BY active DESC, id LIMIT 1",
-                [taxId],
-              );
-              let customerCreated = false;
-              if (!cu) {
-                [cu] = await q.query<{ id: number; payment_days: number }>(
-                  `INSERT INTO customers(name, kind, legal_name, tax_id, tax_office, address, city, phone, email, note)
-                   VALUES ($1,'single',$1,$2,$3,$4,$5,$6,$7,'EDM faturasından açıldı') RETURNING id, payment_days`,
-                  [p.customer.name || taxId, taxId, p.customer.taxOffice, p.customer.address, p.customer.city, p.customer.phone, p.customer.email],
-                );
-                customerCreated = true;
-              }
-              const products = await q.query<{ id: number; code: string }>('SELECT id, code FROM products');
-              const byCode = new Map(products.map((x) => [x.code.toLocaleUpperCase('tr'), x.id]));
-              const date = p.issueDate || today();
-              const no = await nextNo(q, 'invoices', 'FTR', date);
-              const subtotal = p.lines.reduce((s, l) => s + l.net, 0);
-              const vatTotal = p.lines.reduce((s, l) => s + l.vat, 0);
-              const [{ id }] = await q.query<{ id: number }>(
-                `INSERT INTO invoices(no, date, customer_id, due_date, subtotal, vat_total, total, note, e_invoice_no, e_uuid, e_profile, e_status, e_status_desc, e_source, e_sent_at)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'edm', now()) RETURNING id`,
-                [
-                  no,
-                  date,
-                  cu.id,
-                  addDays(date, cu.payment_days),
-                  subtotal,
-                  vatTotal,
-                  p.total || subtotal + vatTotal,
-                  p.notes.filter((n) => !/^Rozet no:/.test(n)).join(' · ').slice(0, 1000) || null,
-                  p.id || it.id || null,
-                  it.uuid.toUpperCase(),
-                  p.profile || null,
-                  st?.status ?? full.status ?? null,
-                  st?.statusDescription ?? full.statusDescription ?? null,
-                ],
-              );
-              for (const l of p.lines) {
-                const code = l.code ?? l.name.split(/\s+/)[0];
-                const productId = byCode.get(code.toLocaleUpperCase('tr')) ?? null;
-                await q.query(`INSERT INTO invoice_lines(invoice_id, product_id, description, qty, unit_price, vat_rate, net, vat, total) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [
-                  id,
-                  productId,
-                  l.code && !l.name.startsWith(l.code) ? `${l.code} ${l.name}` : l.name,
-                  l.qty,
-                  l.unitPrice,
-                  l.vatRate,
-                  l.net,
-                  l.vat,
-                  l.net + l.vat,
-                ]);
-              }
-              return { id, no, customerCreated };
-            });
+            const r = await importParsedInvoice(db, p, { uuid: it.uuid, id: it.id, status: st?.status ?? full.status, statusDescription: st?.statusDescription ?? full.statusDescription, companyTaxId: co.taxId, today: today() });
             results.push({ uuid: it.uuid, ok: true, invoiceId: r.id, no: r.no, customerCreated: r.customerCreated });
           } catch (e) {
             if (e instanceof EdmError && /bağlanılamadı|oturum/i.test(e.message)) throw e;

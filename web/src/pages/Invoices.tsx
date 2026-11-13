@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, EDM_PROFILE, EDM_TONE, edmTone, INVOICE_STATUS, type DispatchSummary, type EdmInvoice, type EdmImportResult } from '../api';
+import { api, KIND_LABEL, EDM_PROFILE, EDM_TONE, edmTone, INVOICE_STATUS, type DispatchSummary, type EdmInvoice, type EdmImportResult, type OnboardingPreview } from '../api';
 import { Link, queryParam, useNav } from '../router';
-import { Badge, Confirm, Empty, ErrorLine, Field, Modal, Page, SearchSelect, Stat, useLoad, useToast } from '../ui';
+import { Badge, Confirm, Empty, ErrorLine, Field, Modal, Page, SearchSelect, Stat, fileToBase64, useLoad, useToast } from '../ui';
 import { fmtNum, formatTL, monthStart, today, trDate } from '../money';
 import { PaymentDialog } from './Payments';
 
@@ -506,6 +506,11 @@ export function EdmImportPage() {
       title="EDM'den faturaları al"
       back={<Link to="/faturalar">‹ Faturalar</Link>}
       subtitle="EDM'de kesilmiş giden faturalar listelenir. Rozet'te karşılığı olanlar eşleştirilir (e-Fatura no ve ETTN yazılır); olmayanlar irsaliyesiz fatura olarak cariye işlenir, stok değişmez."
+      actions={
+        <Link to="/faturalar/edm/kurulum" className="btn">
+          İlk kurulum (Excel ile müşteriler)
+        </Link>
+      }
     >
       <div className="card mb-4 flex flex-wrap items-end gap-3 p-4">
         <Field label="EDM'de oluşturulma: başlangıç">
@@ -634,6 +639,240 @@ export function EdmImportPage() {
           {busy ? 'Aktarılıyor…' : 'Seçilenleri Rozet’e al'}
         </button>
       </div>
+    </Page>
+  );
+}
+
+/**
+ * İlk kurulum: EDM'deki geçmiş giden faturalardan müşteri listesi Excel'e alınır; kullanıcı türleri
+ * (zincir / tek kafe / franchise şube / atla) işaretleyip geri yükler.
+ */
+export function EdmOnboardingPage() {
+  const year = (() => {
+    const d = new Date(today());
+    d.setFullYear(d.getFullYear() - 1);
+    return d.toISOString().slice(0, 10);
+  })();
+  const [from, setFrom] = useState(year);
+  const [to, setTo] = useState(today());
+  const [downloading, setDownloading] = useState(false);
+  const [file, setFile] = useState<{ name: string; data: string } | null>(null);
+  const [preview, setPreview] = useState<OnboardingPreview | null>(null);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  const [done, setDone] = useState<{ customersCreated: number; invoicesImported: number; invoicesFailed: { id: string; message: string }[] } | null>(null);
+  const toast = useToast();
+  const { go } = useNav();
+
+  const download = async () => {
+    setDownloading(true);
+    setErr('');
+    try {
+      const r = await fetch(api.onboardingExportUrl({ from, to }), { credentials: 'same-origin' });
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `Hata (${r.status})`);
+      const [c, i] = (r.headers.get('x-rozet-counts') ?? '').split(';');
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `edm-ilk-kurulum-${from}-${to}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      if (c) toast(`${c} firma, ${i} fatura Excel'e alındı`);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setDownloading(false);
+    }
+  };
+  const load = async (f: { name: string; data: string }) => {
+    setBusy(true);
+    setErr('');
+    setDone(null);
+    try {
+      setPreview(await api.onboardingPreview(f.data));
+    } catch (e) {
+      setPreview(null);
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const s = preview?.summary;
+  const kindLabel = (k: OnboardingPreview['customers'][number]['kind']) => (k === 'skip' ? 'Atla' : k === 'branch' ? 'Franchise şube' : KIND_LABEL[k]);
+  return (
+    <Page
+      title="EDM ilk kurulum"
+      back={<Link to="/faturalar/edm">‹ EDM'den al</Link>}
+      subtitle="Geçmişte EDM'den kesilen faturalardaki firmalar Excel'e alınır. Siz her firmanın zincir mi, tek kafe mi olduğunu işaretlersiniz; dosyayı yükleyince müşteriler (ve isterseniz geçmiş faturalar) Rozet'e açılır."
+    >
+      <div className="mb-4 grid grid-cols-3 gap-4">
+        <div className="card p-4">
+          <h3 className="mb-1 font-semibold">1. Excel'i indirin</h3>
+          <p className="mb-3 text-xs text-muted">EDM'de bu aralıkta oluşturulmuş giden faturalar taranır. Çok fatura varsa birkaç dakika sürebilir.</p>
+          <div className="mb-3 grid grid-cols-2 gap-2">
+            <Field label="Başlangıç">
+              <input type="date" className="input" value={from} onChange={(e) => setFrom(e.target.value)} />
+            </Field>
+            <Field label="Bitiş">
+              <input type="date" className="input" value={to} onChange={(e) => setTo(e.target.value)} />
+            </Field>
+          </div>
+          <button className="btn btn-primary w-full" disabled={downloading} onClick={download}>
+            {downloading ? "EDM'den okunuyor…" : "Excel'i indir"}
+          </button>
+        </div>
+        <div className="card p-4 text-sm">
+          <h3 className="mb-1 font-semibold">2. Türleri işaretleyin</h3>
+          <ul className="list-disc space-y-1 pl-4 text-xs text-muted">
+            <li>
+              <b className="text-ink">Müşteriler</b> sayfasında <b className="text-ink">Tür</b> sütunu: Tek kafe (hazır gelir), Zincir, Franchise şube ya da Atla.
+            </li>
+            <li>Franchise şube için <b className="text-ink">Bağlı zincir</b> sütununa zincirin vergi nosunu ya da kısa adını yazın.</li>
+            <li>Kısa ad, kod ve vade sütunlarını isterseniz düzeltin.</li>
+            <li>
+              Cari için <b className="text-ink">Açılış bakiyesi</b> ve <b className="text-ink">Açılış tarihi</b> girin; o tarihten önceki faturalar bakiyeye eklenmez.
+            </li>
+            <li>
+              <b className="text-ink">Faturalar</b> sayfasında alınmasını istemediklerinizi Hayır yapın.
+            </li>
+          </ul>
+        </div>
+        <div className="card p-4">
+          <h3 className="mb-1 font-semibold">3. Dosyayı yükleyin</h3>
+          <p className="mb-3 text-xs text-muted">Önce önizleme gösterilir; onaylamadan hiçbir şey kaydedilmez.</p>
+          <input
+            type="file"
+            accept=".xlsx"
+            className="block w-full text-sm"
+            onChange={async (e) => {
+              const f = e.target.files?.[0];
+              if (!f) return;
+              const v = { name: f.name, data: await fileToBase64(f) };
+              setFile(v);
+              load(v);
+              e.target.value = '';
+            }}
+          />
+          {busy && <p className="mt-2 text-sm text-muted">Okunuyor…</p>}
+          {file && !busy && (
+            <button className="btn btn-sm mt-2" onClick={() => load(file)}>
+              {file.name} · tekrar oku
+            </button>
+          )}
+        </div>
+      </div>
+      <ErrorLine error={err} />
+      {done && (
+        <div className="card mb-4 p-4 text-sm">
+          <div className="font-semibold">
+            {done.customersCreated} müşteri açıldı · {done.invoicesImported} fatura içe alındı
+          </div>
+          {done.invoicesFailed.length > 0 && (
+            <ul className="mt-2 list-disc pl-5 text-bad">
+              {done.invoicesFailed.map((f) => (
+                <li key={f.id}>
+                  {f.id}: {f.message}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-3 flex gap-2">
+            <button className="btn btn-sm" onClick={() => go('/musteriler')}>
+              Müşterilere git
+            </button>
+            <button className="btn btn-sm" onClick={() => go('/faturalar')}>
+              Faturalara git
+            </button>
+          </div>
+        </div>
+      )}
+      {preview && s && (
+        <>
+          {preview.errors.length > 0 && (
+            <div className="mb-4 rounded-xl border border-bad/30 bg-bad-soft p-3 text-sm">
+              <div className="mb-1 font-semibold text-bad">{preview.errors.length} sorun var — Excel'de düzeltip dosyayı tekrar seçin</div>
+              <ul className="list-disc pl-5 text-bad">
+                {preview.errors.slice(0, 40).map((e, i) => (
+                  <li key={i}>
+                    {e.sheet}
+                    {e.row ? `, satır ${e.row}` : ''}: {e.message}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="mb-4 grid grid-cols-4 gap-3">
+            <Stat label="Açılacak müşteri" value={fmtNum(s.create)} sub={`${s.chains} zincir · ${s.singles} tek kafe · ${s.branches} franchise`} />
+            <Stat label="Zaten kayıtlı" value={fmtNum(s.existing)} sub="değiştirilmez" />
+            <Stat label="Atlanacak" value={fmtNum(s.skip)} />
+            <Stat label="İçe alınacak fatura" value={fmtNum(s.invoicesToImport)} sub={formatTL(s.invoicesTotal)} />
+          </div>
+          {s.invoicesToImport > 0 && s.withOpening < s.create && (
+            <div className="mb-4 rounded-xl border border-warn/30 bg-warn-soft p-3 text-sm text-warn">
+              {s.create - s.withOpening} yeni müşteride açılış bakiyesi yok: bu müşterilerin içe alınan bütün faturaları ödenmemiş görünecek. Ödenmişse Excel'de açılış bakiyesi ve tarihi girin ya da sonra tahsilat girin.
+            </div>
+          )}
+          <div className="card mb-4 overflow-hidden">
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>Satır</th>
+                  <th>Kısa ad</th>
+                  <th>Vergi no</th>
+                  <th>Tür</th>
+                  <th>Zincir</th>
+                  <th className="text-right">Vade</th>
+                  <th className="text-right">Açılış</th>
+                  <th>Rozet'te</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.customers.map((c) => (
+                  <tr key={c.taxId} className={c.kind === 'skip' || c.existingId ? 'opacity-60' : ''}>
+                    <td className="text-muted">{c.row}</td>
+                    <td className="font-medium">
+                      {c.name}
+                      {c.legalName && c.legalName !== c.name && <div className="text-xs font-normal text-muted">{c.legalName}</div>}
+                    </td>
+                    <td className="tabular">{c.taxId}</td>
+                    <td>
+                      <Badge tone={c.kind === 'chain' ? 'brand' : c.kind === 'skip' ? 'muted' : c.kind === 'branch' ? 'warn' : 'ok'}>{kindLabel(c.kind)}</Badge>
+                    </td>
+                    <td>{c.parentName ?? ''}</td>
+                    <td className="tabular text-right">{c.paymentDays} gün</td>
+                    <td className="tabular text-right">{c.openingDate ? `${formatTL(c.openingBalance)} · ${trDate(c.openingDate)}` : '—'}</td>
+                    <td className="text-sm">{c.existingId ? <Link to={`/musteriler/${c.existingId}`}>{c.existingName}</Link> : c.kind === 'skip' ? 'Alınmayacak' : 'Yeni'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!preview.customers.length && <Empty>Dosyada müşteri yok.</Empty>}
+          </div>
+          <div className="flex items-center justify-end gap-3">
+            <span className="text-sm text-muted">
+              {s.create} müşteri · {s.invoicesToImport} fatura
+            </span>
+            <button className="btn btn-primary" disabled={preview.errors.length > 0 || (!s.create && !s.invoicesToImport)} onClick={() => setConfirm(true)}>
+              Rozet'e al
+            </button>
+          </div>
+        </>
+      )}
+      {confirm && file && s && (
+        <Confirm
+          title="İlk kurulumu tamamla"
+          text={`${s.create} müşteri açılacak${s.invoicesToImport ? `, ${s.invoicesToImport} fatura (${formatTL(s.invoicesTotal)}) EDM'den okunup cariye işlenecek` : ''}. Stok değişmez.`}
+          yes="Rozet'e al"
+          onClose={() => setConfirm(false)}
+          onYes={async () => {
+            const r = await api.onboardingImport(file.data);
+            setDone(r);
+            setPreview(null);
+            toast(`${r.customersCreated} müşteri, ${r.invoicesImported} fatura alındı`, r.invoicesFailed.length ? 'bad' : undefined);
+          }}
+        />
+      )}
     </Page>
   );
 }

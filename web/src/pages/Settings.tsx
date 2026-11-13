@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, type EdmSettings, type Settings, type User } from '../api';
 import { getUser } from '../App';
+import { Link } from '../router';
 import { Badge, ErrorLine, Field, Modal, Page, useLoad, useToast } from '../ui';
 
 export function SettingsPage() {
@@ -178,6 +179,11 @@ function EdmCard() {
         >
           {busy ? 'Deneniyor…' : 'Bağlantıyı test et'}
         </button>
+        {f.enabled && (
+          <Link to="/faturalar/edm/kurulum" className="btn ml-auto">
+            İlk kurulum: müşterileri EDM'den al
+          </Link>
+        )}
       </div>
     </div>
   );

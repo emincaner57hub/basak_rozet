@@ -51,6 +51,13 @@ bunlarla açılır. Veritabanı ayrı PostgreSQL; boş başlar (örnek veri içi
    Listelenen **GB** etiketini "Kullan" ile gönderici etiketi yapın, kaydedin.
 4. Test ortamında birkaç fatura gönderip EDM test portalında kontrol edin; sonra ortamı **Canlı** yapın.
 
+**İlk kurulum (müşterileri elle girmemek için):** Faturalar → EDM'den al → *İlk kurulum*. EDM'deki geçmiş
+giden faturalardan firma listesi Excel'e alınır (ünvan, vergi no/dairesi, adres, fatura sayısı, ciro).
+"Tür" sütununda Tek kafe / Zincir / Franchise şube / Atla seçilir, franchise için "Bağlı zincir" yazılır;
+isterseniz açılış bakiyesi + tarihi girilir. Dosya yüklenince önizleme gösterilir, onayla müşteriler
+açılır ve "Faturalar" sayfasında Evet olan geçmiş faturalar içe alınır. Zaten kayıtlı firmalar değişmez;
+dosya ikinci kez yüklenirse çift kayıt oluşmaz.
+
 Şifre ayarlarda saklanır (geri gösterilmez). İsterseniz Render'da `EDM_USERNAME`, `EDM_PASSWORD`
 (ve gerekirse `EDM_URL`) ortam değişkenleri ayarların önüne geçer.
 

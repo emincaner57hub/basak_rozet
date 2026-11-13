@@ -324,6 +324,27 @@ export interface EdmImportResult {
   customerCreated?: boolean;
 }
 
+export interface OnboardingPreview {
+  customers: {
+    row: number;
+    taxId: string;
+    legalName: string;
+    name: string;
+    kind: 'single' | 'chain' | 'branch' | 'skip';
+    parentName: string | null;
+    code: string | null;
+    city: string | null;
+    paymentDays: number;
+    openingBalance: number;
+    openingDate: string | null;
+    existingId: number | null;
+    existingName: string | null;
+  }[];
+  invoices: { row: number; id: string; uuid: string; date: string; taxId: string; name: string; total: number; take: boolean; already: string | null }[];
+  summary: { create: number; existing: number; skip: number; chains: number; singles: number; branches: number; invoicesToImport: number; invoicesTotal: number; withOpening: number };
+  errors: { sheet: string; row: number | null; message: string }[];
+}
+
 export type PayMethod = 'havale' | 'nakit' | 'kart' | 'cek' | 'diger';
 export const PAY_METHOD: Record<PayMethod, string> = { havale: 'Havale / EFT', nakit: 'Nakit', kart: 'Kredi kartı', cek: 'Çek', diger: 'Diğer' };
 export interface Payment {
@@ -529,6 +550,9 @@ export const api = {
   saveEdmSettings: (b: EdmSettingsInput) => req('PUT', '/api/edm/settings', b),
   edmTest: () => req<{ ok: true; company: string | null; aliases: { alias: string; title: string; unit: string }[] }>('POST', '/api/edm/test', {}),
   edmInvoices: (o: { from?: string; to?: string }) => req<{ from: string; to: string; invoices: EdmInvoice[] }>('GET', `/api/edm/invoices${qs(o)}`),
+  onboardingExportUrl: (o: { from: string; to: string }) => `/api/edm/onboarding/export${qs(o)}`,
+  onboardingPreview: (data: string) => req<OnboardingPreview>('POST', '/api/edm/onboarding/preview', { data }),
+  onboardingImport: (data: string) => req<{ customersCreated: number; invoicesImported: number; invoicesFailed: { id: string; message: string }[] }>('POST', '/api/edm/onboarding/import', { data }),
   edmImport: (items: { uuid: string; id: string; action: 'link' | 'create'; invoiceId?: number }[]) => req<{ results: EdmImportResult[] }>('POST', '/api/edm/import', { items }),
 
   payments: (o: { customerId?: number; from?: string; to?: string } = {}) => req<Payment[]>('GET', `/api/payments${qs(o)}`),
