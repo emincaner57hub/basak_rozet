@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { getSetting, openDb, setSetting } from './db.js';
 import { buildApp } from './app.js';
-import { ensureAdmin } from './auth.js';
+import { ensureAdmin, hashPassword } from './auth.js';
 import { seedDemo } from './seed.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -36,6 +36,11 @@ if (!secret) {
 const adminEmail = process.env.ADMIN_EMAIL ?? (production ? undefined : 'admin@local');
 const adminPassword = process.env.ADMIN_PASSWORD ?? (production ? undefined : 'admin1234');
 if (await ensureAdmin(db, adminEmail, adminPassword)) console.log(`İlk yönetici oluşturuldu: ${adminEmail}`);
+// Şifre unutulursa: Render'da ADMIN_RESET=1 → ADMIN_EMAIL kullanıcısının şifresi ADMIN_PASSWORD olur (sonra ADMIN_RESET silinmeli)
+if (production && process.env.ADMIN_RESET === '1' && adminEmail && adminPassword) {
+  const r = await db.query<{ id: number }>("UPDATE users SET password_hash = $1, active = true WHERE email = $2 RETURNING id", [await hashPassword(adminPassword), adminEmail.trim().toLowerCase()]);
+  console.log(r.length ? `Yönetici şifresi ADMIN_PASSWORD ile sıfırlandı: ${adminEmail}` : `ADMIN_RESET: ${adminEmail} kullanıcısı bulunamadı`);
+}
 else if (production && !(await db.query('SELECT 1 FROM users LIMIT 1')).length) console.warn('UYARI: Kullanıcı yok. ADMIN_EMAIL ve ADMIN_PASSWORD ortam değişkenlerini girin.');
 
 const app = buildApp({ db, sessionSecret: secret, webDist: path.resolve(here, '../../web/dist'), secureCookies: production });
