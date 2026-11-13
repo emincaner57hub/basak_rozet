@@ -46,7 +46,7 @@ export async function invoiceStates(q: Queryable, customerId: number, today: str
 
 export async function invoiceDetail(q: Queryable, id: number, today: string) {
   const [inv] = await q.query<Row & { customerId: number }>(
-    `SELECT i.id, i.no, i.date, i.due_date "dueDate", i.subtotal, i.vat_total "vatTotal", i.total, i.cancelled, i.e_invoice_no "eInvoiceNo", i.note,
+    `SELECT i.id, i.no, i.date, i.due_date "dueDate", i.subtotal, i.vat_total "vatTotal", i.total, i.cancelled, i.e_invoice_no "eInvoiceNo", i.e_uuid "eUuid", i.e_profile "eProfile", i.e_status "eStatus", i.e_status_desc "eStatusDesc", i.e_error "eError", i.e_sent_at "eSentAt", i.e_source "eSource", i.note,
             i.customer_id "customerId", c.name "customerName", c.legal_name "legalName", c.tax_id "taxId", c.tax_office "taxOffice", c.address, c.city
      FROM invoices i JOIN customers c ON c.id = i.customer_id WHERE i.id = $1`,
     [id],
@@ -83,7 +83,7 @@ export function registerInvoices(app: FastifyInstance, { db, now }: { db: Db; no
       .object({ customerId: z.coerce.number().int().optional(), status: z.enum(['open', 'overdue', 'all']).default('all'), from: daySchema.optional(), to: daySchema.optional() })
       .parse(req.query);
     const rows = await db.query<Row & { id: number; customerId: number; cancelled: boolean }>(
-      `SELECT i.id, i.no, i.date, i.due_date "dueDate", i.subtotal, i.vat_total "vatTotal", i.total, i.cancelled, i.e_invoice_no "eInvoiceNo",
+      `SELECT i.id, i.no, i.date, i.due_date "dueDate", i.subtotal, i.vat_total "vatTotal", i.total, i.cancelled, i.e_invoice_no "eInvoiceNo", i.e_uuid "eUuid", i.e_profile "eProfile", i.e_status "eStatus", i.e_status_desc "eStatusDesc", i.e_error "eError", i.e_sent_at "eSentAt", i.e_source "eSource",
               i.customer_id "customerId", c.name "customerName", c.kind "customerKind",
               (SELECT COUNT(*) FROM dispatches d WHERE d.invoice_id = i.id) "dispatchCount"
        FROM invoices i JOIN customers c ON c.id = i.customer_id

@@ -5,7 +5,7 @@ import { getSetting, setSetting } from './db.js';
 import { optText } from './lib.js';
 
 /** Firma bilgileri: irsaliye ve faturada basılır */
-const KEYS = ['companyName', 'companyLegalName', 'companyTaxId', 'companyTaxOffice', 'companyAddress', 'companyPhone', 'companyEmail', 'companyIban', 'invoiceNote'] as const;
+const KEYS = ['companyName', 'companyLegalName', 'companyTaxId', 'companyTaxOffice', 'companyAddress', 'companyDistrict', 'companyCity', 'companyPhone', 'companyEmail', 'companyIban', 'invoiceNote'] as const;
 
 export function registerSettings(app: FastifyInstance, { db }: { db: Db }) {
   app.get('/api/settings', async () => {

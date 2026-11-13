@@ -13,6 +13,9 @@ import { registerDispatches } from './dispatches.js';
 import { registerInvoices } from './invoices.js';
 import { registerReports } from './reports.js';
 import { registerSettings } from './settings.js';
+import { registerEdm } from './edm.js';
+import { registerEdmOnboarding } from './edm-onboarding.js';
+import type { FetchFn } from './edm/soap.js';
 
 export const VERSION = (process.env.RENDER_GIT_COMMIT ?? '').slice(0, 7) || 'yerel';
 
@@ -22,9 +25,11 @@ export interface AppOptions {
   webDist?: string;
   sessionSecret: string;
   secureCookies?: boolean;
+  /** EDM web servisine istek (testlerde sahte sunucu) */
+  edmFetch?: FetchFn;
 }
 
-export function buildApp({ db, now = () => new Date(), webDist, sessionSecret, secureCookies = false }: AppOptions): FastifyInstance {
+export function buildApp({ db, now = () => new Date(), webDist, sessionSecret, secureCookies = false, edmFetch }: AppOptions): FastifyInstance {
   const app = Fastify({ logger: process.env.NODE_ENV === 'production' ? { level: 'warn' } : false, bodyLimit: 20 * 1024 * 1024 });
   app.register(cookie);
 
@@ -52,6 +57,8 @@ export function buildApp({ db, now = () => new Date(), webDist, sessionSecret, s
     registerInvoices(app, { db, now });
     registerReports(app, { db, now });
     registerSettings(app, { db });
+    registerEdm(app, { db, now, currentUser, fetchFn: edmFetch });
+    registerEdmOnboarding(app, { db, now, fetchFn: edmFetch });
   });
 
   // Web arayüzü (derlenmiş). index.html önbelleğe alınmaz: yeni sürüm hemen gelsin.

@@ -250,6 +250,13 @@ export interface InvoiceSummary {
   total: number;
   cancelled: boolean;
   eInvoiceNo: string | null;
+  eUuid: string | null;
+  eProfile: string | null;
+  eStatus: string | null;
+  eStatusDesc: string | null;
+  eError: string | null;
+  eSentAt: string | null;
+  eSource: 'rozet' | 'edm';
   customerId: number;
   customerName: string;
   customerKind: CustomerKind;
@@ -276,6 +283,66 @@ export interface PendingInvoice {
   dispatchCount: number;
   oldest: string;
   net: number;
+}
+
+export interface EdmSettings {
+  enabled: boolean;
+  env: 'test' | 'prod';
+  url: string;
+  effectiveUrl: string;
+  username: string;
+  hasPassword: boolean;
+  senderAlias: string;
+  profile: 'TEMELFATURA' | 'TICARIFATURA';
+  allowEarchive: boolean;
+  fromEnv: { username: boolean; password: boolean; url: boolean };
+}
+export type EdmSettingsInput = Pick<EdmSettings, 'enabled' | 'env' | 'url' | 'username' | 'senderAlias' | 'profile' | 'allowEarchive'> & { password?: string };
+export interface EdmInvoice {
+  id: string;
+  uuid: string;
+  issueDate: string | null;
+  customerName: string | null;
+  taxId: string | null;
+  total: number;
+  currency: string;
+  profile: string | null;
+  status: string;
+  statusDescription: string;
+  tone: EdmTone;
+  state: 'linked' | 'candidate' | 'new';
+  invoice: { id: number; no: string; cancelled: boolean } | null;
+  customer: { id: number; name: string } | null;
+}
+export type EdmTone = 'ok' | 'wait' | 'bad' | 'none';
+export interface EdmImportResult {
+  uuid: string;
+  ok: boolean;
+  invoiceId?: number;
+  no?: string;
+  message?: string;
+  customerCreated?: boolean;
+}
+
+export interface OnboardingPreview {
+  customers: {
+    row: number;
+    taxId: string;
+    legalName: string;
+    name: string;
+    kind: 'single' | 'chain' | 'branch' | 'skip';
+    parentName: string | null;
+    code: string | null;
+    city: string | null;
+    paymentDays: number;
+    openingBalance: number;
+    openingDate: string | null;
+    existingId: number | null;
+    existingName: string | null;
+  }[];
+  invoices: { row: number; id: string; uuid: string; date: string; taxId: string; name: string; total: number; take: boolean; already: string | null }[];
+  summary: { create: number; existing: number; skip: number; chains: number; singles: number; branches: number; invoicesToImport: number; invoicesTotal: number; withOpening: number };
+  errors: { sheet: string; row: number | null; message: string }[];
 }
 
 export type PayMethod = 'havale' | 'nakit' | 'kart' | 'cek' | 'diger';
@@ -385,7 +452,7 @@ export interface User {
   active?: boolean;
 }
 export type Settings = Record<
-  'companyName' | 'companyLegalName' | 'companyTaxId' | 'companyTaxOffice' | 'companyAddress' | 'companyPhone' | 'companyEmail' | 'companyIban' | 'invoiceNote',
+  'companyName' | 'companyLegalName' | 'companyTaxId' | 'companyTaxOffice' | 'companyAddress' | 'companyDistrict' | 'companyCity' | 'companyPhone' | 'companyEmail' | 'companyIban' | 'invoiceNote',
   string
 >;
 
@@ -476,6 +543,17 @@ export const api = {
   createInvoice: (b: { customerId: number; date: string; dispatchIds: number[]; note?: string | null }) => req<{ id: number; no: string; total: number }>('POST', '/api/invoices', b),
   cancelInvoice: (id: number) => req('POST', `/api/invoices/${id}/cancel`, {}),
   updateInvoice: (id: number, b: { eInvoiceNo: string | null; note: string | null; dueDate?: string }) => req('PUT', `/api/invoices/${id}`, b),
+  edmSend: (id: number) => req<{ ok: true; eInvoiceNo: string | null; profile?: string; status: string; already?: boolean }>('POST', `/api/invoices/${id}/edm/send`, {}),
+  edmStatus: (id: number) => req<{ ok: true; status: string; eInvoiceNo: string | null }>('POST', `/api/invoices/${id}/edm/status`, {}),
+  edmRefresh: () => req<{ checked: number; changed: number }>('POST', '/api/edm/refresh', {}),
+  edmSettings: () => req<EdmSettings>('GET', '/api/edm/settings'),
+  saveEdmSettings: (b: EdmSettingsInput) => req('PUT', '/api/edm/settings', b),
+  edmTest: () => req<{ ok: true; company: string | null; aliases: { alias: string; title: string; unit: string }[] }>('POST', '/api/edm/test', {}),
+  edmInvoices: (o: { from?: string; to?: string }) => req<{ from: string; to: string; invoices: EdmInvoice[] }>('GET', `/api/edm/invoices${qs(o)}`),
+  onboardingExportUrl: (o: { from: string; to: string }) => `/api/edm/onboarding/export${qs(o)}`,
+  onboardingPreview: (data: string) => req<OnboardingPreview>('POST', '/api/edm/onboarding/preview', { data }),
+  onboardingImport: (data: string) => req<{ customersCreated: number; invoicesImported: number; invoicesFailed: { id: string; message: string }[] }>('POST', '/api/edm/onboarding/import', { data }),
+  edmImport: (items: { uuid: string; id: string; action: 'link' | 'create'; invoiceId?: number }[]) => req<{ results: EdmImportResult[] }>('POST', '/api/edm/import', { items }),
 
   payments: (o: { customerId?: number; from?: string; to?: string } = {}) => req<Payment[]>('GET', `/api/payments${qs(o)}`),
   createPayment: (b: { customerId: number; date: string; amount: number; method: PayMethod; reference: string | null; note: string | null }) => req('POST', '/api/payments', b),
@@ -505,6 +583,22 @@ export const INVOICE_STATUS: Record<InvoiceStatus, { label: string; tone: Tone }
   paid: { label: 'Ödendi', tone: 'ok' },
   cancelled: { label: 'İptal', tone: 'muted' },
 };
+/** EDM durum metni → kısa etiket */
+export function edmTone(status: string | null | undefined): EdmTone {
+  if (!status) return 'none';
+  const s = status.replace(/\s/g, '').toUpperCase();
+  if (/FAIL|ERROR|REJECTED|REJECT-SUCCEED|CANCEL/.test(s)) return 'bad';
+  if (/SUCCEED/.test(s)) return 'ok';
+  return 'wait';
+}
+export const EDM_TONE: Record<EdmTone, { label: string; tone: Tone }> = {
+  ok: { label: 'e-Fatura iletildi', tone: 'ok' },
+  wait: { label: 'EDM işleniyor', tone: 'brand' },
+  bad: { label: 'EDM hata', tone: 'bad' },
+  none: { label: 'EDM yanıtı bekleniyor', tone: 'warn' },
+};
+export const EDM_PROFILE: Record<string, string> = { TEMELFATURA: 'e-Fatura (temel)', TICARIFATURA: 'e-Fatura (ticari)', EARSIVFATURA: 'e-Arşiv' };
+
 export const COST_LABEL: Record<CostType, string> = {
   freight: 'Navlun',
   customs_duty: 'Gümrük vergisi',

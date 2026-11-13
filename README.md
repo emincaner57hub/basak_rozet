@@ -17,7 +17,11 @@ sipariş, stok, irsaliye, fatura, tahsilat ve maliyet takibi.
 - **İrsaliye:** siparişten kısmi ya da tam sevk, stoktan düşer; stand/etiket 0 ₺ ile eklenir ve
   müşterinin promosyon giderine yazılır. Yazdırılabilir A4 sevk irsaliyesi.
 - **Fatura:** faturalanmamış irsaliyelerden, faturanın kesileceği müşteriye toplu; KDV satır bazında;
-  vade müşteri vadesinden. e-Fatura numarası sonradan girilir. Yazdırılabilir.
+  vade müşteri vadesinden. Yazdırılabilir.
+- **EDM e-Fatura:** fatura tek tuşla EDM'ye gönderilir — alıcı e-Fatura mükellefiyse e-Fatura (temel/ticari),
+  değilse e-Arşiv; EDM'nin verdiği fatura no, ETTN ve durum geri yazılır. **Faturalar → EDM'den al**:
+  EDM portalında kesilmiş giden faturalar listelenir; Rozet'te karşılığı olan eşleştirilir, olmayan
+  irsaliyesiz fatura olarak cariye işlenir (müşteri vergi no ile bulunur, yoksa açılır; stok değişmez).
 - **Tahsilat:** havale vb.; faturaları eskiden yeniye kapatır, vadesi geçenler işaretlenir. Cari ekstre.
 - **Raporlar:** satış (zincir / şube / ürün / ay), **müşteri kârlılığı** (ciro − maliyet − promosyon),
   stok değeri ve kaç gün yeteceği, alacak yaşlandırma. CSV indirme.
@@ -39,7 +43,25 @@ Testler: `npm test`
 `render.yaml` ile: New → Blueprint → depo. `ADMIN_EMAIL` ve `ADMIN_PASSWORD` girilir; ilk yönetici
 bunlarla açılır. Veritabanı ayrı PostgreSQL; boş başlar (örnek veri için bir kez `SEED=1`).
 
+## EDM bağlantısı
+
+1. EDM'den **web servis kullanıcısı** isteyin (portal şifresinden ayrı olabilir).
+2. Ayarlar → Firma bilgileri: ünvan, vergi dairesi, vergi no, **ilçe ve il** dolu olmalı.
+3. Ayarlar → EDM e-Fatura: önce **Test** ortamı, kullanıcı adı / şifre → *Bağlantıyı test et*.
+   Listelenen **GB** etiketini "Kullan" ile gönderici etiketi yapın, kaydedin.
+4. Test ortamında birkaç fatura gönderip EDM test portalında kontrol edin; sonra ortamı **Canlı** yapın.
+
+**İlk kurulum (müşterileri elle girmemek için):** Faturalar → EDM'den al → *İlk kurulum*. EDM'deki geçmiş
+giden faturalardan firma listesi Excel'e alınır (ünvan, vergi no/dairesi, adres, fatura sayısı, ciro).
+"Tür" sütununda Tek kafe / Zincir / Franchise şube / Atla seçilir, franchise için "Bağlı zincir" yazılır;
+isterseniz açılış bakiyesi + tarihi girilir. Dosya yüklenince önizleme gösterilir, onayla müşteriler
+açılır ve "Faturalar" sayfasında Evet olan geçmiş faturalar içe alınır. Zaten kayıtlı firmalar değişmez;
+dosya ikinci kez yüklenirse çift kayıt oluşmaz.
+
+Şifre ayarlarda saklanır (geri gösterilmez). İsterseniz Render'da `EDM_USERNAME`, `EDM_PASSWORD`
+(ve gerekirse `EDM_URL`) ortam değişkenleri ayarların önüne geçer.
+
 ## Sonraki adımlar
 
-- e-Fatura / e-İrsaliye entegrasyonu (entegratör API'si)
+- e-İrsaliye; gelen (alış) e-Faturaları EDM'den çekme
 - Müşteri portalı: kafelerin kendi sipariş vermesi, geçmiş, borç

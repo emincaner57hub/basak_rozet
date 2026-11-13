@@ -340,6 +340,17 @@ const MIGRATIONS: string[] = [
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
   );
   `,
+  // 2 — EDM e-Fatura entegrasyonu: ETTN, entegratör durumu, kaynak (Rozet'te kesildi / EDM'den alındı)
+  `
+  ALTER TABLE invoices ADD COLUMN e_uuid TEXT;
+  ALTER TABLE invoices ADD COLUMN e_profile TEXT;
+  ALTER TABLE invoices ADD COLUMN e_status TEXT;
+  ALTER TABLE invoices ADD COLUMN e_status_desc TEXT;
+  ALTER TABLE invoices ADD COLUMN e_error TEXT;
+  ALTER TABLE invoices ADD COLUMN e_sent_at TIMESTAMPTZ;
+  ALTER TABLE invoices ADD COLUMN e_source TEXT NOT NULL DEFAULT 'rozet' CHECK (e_source IN ('rozet','edm'));
+  CREATE UNIQUE INDEX invoices_e_uuid ON invoices (upper(e_uuid)) WHERE e_uuid IS NOT NULL;
+  `,
 ];
 
 async function migrate(db: Db, MIGRATIONS: string[]) {
