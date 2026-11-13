@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, type Settings, type User } from '../api';
+import { api, type EdmSettings, type Settings, type User } from '../api';
 import { getUser } from '../App';
 import { Badge, ErrorLine, Field, Modal, Page, useLoad, useToast } from '../ui';
 
@@ -8,7 +8,10 @@ export function SettingsPage() {
   return (
     <Page title="Ayarlar">
       <div className="grid grid-cols-2 gap-4">
-        <CompanyCard />
+        <div className="space-y-4">
+          <CompanyCard />
+          {me?.role === 'admin' && <EdmCard />}
+        </div>
         <div className="space-y-4">
           {me?.role === 'admin' && <UsersCard />}
           <PasswordCard />
@@ -24,6 +27,8 @@ const FIELDS: [keyof Settings, string, boolean?][] = [
   ['companyTaxOffice', 'Vergi dairesi'],
   ['companyTaxId', 'Vergi no / TCKN'],
   ['companyAddress', 'Adres', true],
+  ['companyDistrict', 'İlçe'],
+  ['companyCity', 'İl'],
   ['companyPhone', 'Telefon'],
   ['companyEmail', 'E-posta'],
   ['companyIban', 'IBAN (faturada basılır)', true],
@@ -60,6 +65,120 @@ function CompanyCard() {
       >
         Kaydet
       </button>
+    </div>
+  );
+}
+
+/** EDM Bilişim e-Fatura web servisi bağlantısı */
+function EdmCard() {
+  const { data, error, reload } = useLoad(() => api.edmSettings(), []);
+  const [f, setF] = useState<EdmSettings | null>(null);
+  const [password, setPassword] = useState('');
+  const [test, setTest] = useState<{ ok: boolean; text: string; aliases?: { alias: string; unit: string }[] } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  useEffect(() => setF(data), [data]);
+  if (!f) return <ErrorLine error={error} />;
+  const set = <K extends keyof EdmSettings>(k: K, v: EdmSettings[K]) => setF({ ...f, [k]: v });
+  const save = async () => {
+    await api.saveEdmSettings({ enabled: f.enabled, env: f.env, url: f.url, username: f.username, senderAlias: f.senderAlias, profile: f.profile, allowEarchive: f.allowEarchive, password: password || undefined });
+    setPassword('');
+    reload();
+  };
+  return (
+    <div className="card p-5">
+      <div className="mb-1 flex items-center gap-2">
+        <h2 className="flex-1 font-semibold">EDM e-Fatura</h2>
+        {f.enabled ? <Badge tone={f.env === 'prod' ? 'ok' : 'warn'}>{f.env === 'prod' ? 'Canlı' : 'Test'}</Badge> : <Badge>Kapalı</Badge>}
+      </div>
+      <p className="mb-4 text-xs text-muted">
+        Faturalar Rozet'ten EDM'ye gönderilir (alıcı e-Fatura mükellefiyse e-Fatura, değilse e-Arşiv); EDM'de kesilenler Faturalar → “EDM'den al” ile içe alınır. Web servis kullanıcısını EDM'den isteyin; portal şifresi ile aynı olmayabilir.
+      </p>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="col-span-2 flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={f.enabled} onChange={(e) => set('enabled', e.target.checked)} /> Entegrasyon açık
+        </label>
+        <Field label="Ortam">
+          <select className="input" value={f.env} onChange={(e) => set('env', e.target.value as EdmSettings['env'])}>
+            <option value="test">Test (test.edmbilisim.com.tr)</option>
+            <option value="prod">Canlı (portal2.edmbilisim.com.tr)</option>
+          </select>
+        </Field>
+        <Field label="Fatura senaryosu" hint="e-Fatura mükellefleri için">
+          <select className="input" value={f.profile} onChange={(e) => set('profile', e.target.value as EdmSettings['profile'])}>
+            <option value="TEMELFATURA">Temel fatura</option>
+            <option value="TICARIFATURA">Ticari fatura (alıcı kabul/red eder)</option>
+          </select>
+        </Field>
+        <Field label="Web servis kullanıcı adı" hint={f.fromEnv.username ? 'Ortam değişkeninden (EDM_USERNAME)' : undefined}>
+          <input className="input" value={f.username} disabled={f.fromEnv.username} onChange={(e) => set('username', e.target.value)} />
+        </Field>
+        <Field label="Şifre" hint={f.fromEnv.password ? 'Ortam değişkeninden (EDM_PASSWORD)' : f.hasPassword ? 'Kayıtlı · değiştirmek için yazın' : undefined}>
+          <input className="input" type="password" autoComplete="new-password" disabled={f.fromEnv.password} value={password} onChange={(e) => setPassword(e.target.value)} placeholder={f.hasPassword ? '••••••••' : ''} />
+        </Field>
+        <Field label="Gönderici etiketi (GB)" className="col-span-2" hint="ör. urn:mail:defaultgb@firmaniz.com — “Bağlantıyı test et” firmanın etiketlerini listeler">
+          <input className="input" value={f.senderAlias} onChange={(e) => set('senderAlias', e.target.value)} />
+        </Field>
+        <Field label="Özel servis adresi (boş: ortama göre)" className="col-span-2" hint={`Kullanılan: ${f.effectiveUrl}`}>
+          <input className="input" value={f.url} disabled={f.fromEnv.url} onChange={(e) => set('url', e.target.value)} placeholder="https://…/EFaturaEDM.svc" />
+        </Field>
+        <label className="col-span-2 flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={f.allowEarchive} onChange={(e) => set('allowEarchive', e.target.checked)} /> e-Fatura mükellefi olmayan alıcılara e-Arşiv kes
+        </label>
+      </div>
+      {test && (
+        <div className={`mt-3 rounded-lg border p-3 text-sm ${test.ok ? 'border-line' : 'border-bad text-bad'}`}>
+          {test.text}
+          {test.aliases?.map((a) => (
+            <div key={a.alias} className="flex items-center gap-2 text-xs">
+              <Badge tone={a.unit === 'GB' ? 'brand' : 'muted'}>{a.unit || '?'}</Badge>
+              <span className="font-mono">{a.alias}</span>
+              {a.unit === 'GB' && a.alias !== f.senderAlias && (
+                <button className="btn btn-sm" onClick={() => set('senderAlias', a.alias)}>
+                  Kullan
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="mt-4 flex gap-2">
+        <button
+          className="btn btn-primary"
+          onClick={async () => {
+            try {
+              await save();
+              toast('Kaydedildi');
+            } catch (e) {
+              toast((e as Error).message, 'bad');
+            }
+          }}
+        >
+          Kaydet
+        </button>
+        <button
+          className="btn"
+          disabled={busy || !f.enabled}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await save();
+              const r = await api.edmTest();
+              setTest({
+                ok: true,
+                text: r.company ? (r.aliases.length ? `Giriş başarılı. ${r.company} için EDM etiketleri:` : `Giriş başarılı, ancak ${r.company} e-Fatura kayıtlı görünmüyor.`) : 'Giriş başarılı. Firma vergi no girilmemiş.',
+                aliases: r.aliases,
+              });
+            } catch (e) {
+              setTest({ ok: false, text: (e as Error).message });
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? 'Deneniyor…' : 'Bağlantıyı test et'}
+        </button>
+      </div>
     </div>
   );
 }

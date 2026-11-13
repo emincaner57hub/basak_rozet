@@ -5,7 +5,7 @@ import { ToastHost } from './ui';
 import Dashboard from './pages/Dashboard';
 import { OrdersPage, OrderPage, OrderNewPage, ExcelImportPage } from './pages/Orders';
 import { DispatchesPage, DispatchPage, DispatchNewPage } from './pages/Dispatches';
-import { InvoicesPage, InvoicePage, InvoiceNewPage } from './pages/Invoices';
+import { InvoicesPage, InvoicePage, EdmImportPage, InvoiceNewPage } from './pages/Invoices';
 import { PaymentsPage } from './pages/Payments';
 import { CustomersPage, CustomerPage } from './pages/Customers';
 import { ProductsPage, ProductPage } from './pages/Products';
@@ -43,6 +43,7 @@ function Routes() {
   else if ((r = m('/sevkiyat/:id'))) page = <DispatchPage id={Number(r.id)} />;
   else if (m('/faturalar')) page = <InvoicesPage />;
   else if (m('/faturalar/yeni')) page = <InvoiceNewPage />;
+  else if (m('/faturalar/edm')) page = <EdmImportPage />;
   else if ((r = m('/faturalar/:id'))) page = <InvoicePage id={Number(r.id)} />;
   else if (m('/tahsilat')) page = <PaymentsPage />;
   else if (m('/musteriler')) page = <CustomersPage />;

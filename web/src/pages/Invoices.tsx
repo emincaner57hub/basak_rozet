@@ -1,24 +1,55 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, INVOICE_STATUS, type DispatchSummary } from '../api';
+import { api, EDM_PROFILE, EDM_TONE, edmTone, INVOICE_STATUS, type DispatchSummary, type EdmInvoice, type EdmImportResult } from '../api';
 import { Link, queryParam, useNav } from '../router';
 import { Badge, Confirm, Empty, ErrorLine, Field, Modal, Page, SearchSelect, Stat, useLoad, useToast } from '../ui';
-import { fmtNum, formatTL, today, trDate } from '../money';
+import { fmtNum, formatTL, monthStart, today, trDate } from '../money';
 import { PaymentDialog } from './Payments';
 
 export function InvoicesPage() {
   const [status, setStatus] = useState<'all' | 'open' | 'overdue'>('all');
-  const { data, error } = useLoad(() => api.invoices({ status }), [status]);
+  const { data, error, reload } = useLoad(() => api.invoices({ status }), [status]);
   const pending = useLoad(() => api.pendingInvoices(), []);
+  const edm = useLoad(() => api.edmSettings(), []);
   const { go } = useNav();
+  const toast = useToast();
+  const [refreshing, setRefreshing] = useState(false);
+  const waiting = (data ?? []).some((i) => i.eUuid && !i.cancelled && ['wait', 'none'].includes(edmTone(i.eStatus)));
   const open = (data ?? []).reduce((s, i) => s + i.remaining, 0);
   return (
     <Page
       title="Faturalar"
       subtitle="İrsaliyelerden kesilir; tahsilatlar faturaları eskiden yeniye kapatır"
       actions={
-        <button className="btn btn-primary" onClick={() => go('/faturalar/yeni')}>
-          + Fatura kes
-        </button>
+        <>
+          {edm.data?.enabled && waiting && (
+            <button
+              className="btn"
+              disabled={refreshing}
+              onClick={async () => {
+                setRefreshing(true);
+                try {
+                  const r = await api.edmRefresh();
+                  toast(`${r.checked} faturanın EDM durumu sorgulandı${r.changed ? ` · ${r.changed} değişti` : ''}`);
+                  reload();
+                } catch (e) {
+                  toast((e as Error).message, 'bad');
+                } finally {
+                  setRefreshing(false);
+                }
+              }}
+            >
+              {refreshing ? 'Sorgulanıyor…' : 'EDM durumlarını yenile'}
+            </button>
+          )}
+          {edm.data?.enabled && (
+            <button className="btn" onClick={() => go('/faturalar/edm')}>
+              EDM'den al
+            </button>
+          )}
+          <button className="btn btn-primary" onClick={() => go('/faturalar/yeni')}>
+            + Fatura kes
+          </button>
+        </>
       }
     >
       <ErrorLine error={error} />
@@ -80,6 +111,16 @@ export function InvoicesPage() {
                 <td className="whitespace-nowrap font-medium">
                   {i.no}
                   {i.eInvoiceNo && <div className="text-xs font-normal text-muted">e-Fatura {i.eInvoiceNo}</div>}
+                  {i.eUuid && !i.cancelled && edmTone(i.eStatus) !== 'ok' && (
+                    <div className="mt-0.5">
+                      <Badge tone={i.eError ? 'bad' : EDM_TONE[edmTone(i.eStatus)].tone}>{i.eError ? 'EDM hata' : EDM_TONE[edmTone(i.eStatus)].label}</Badge>
+                    </div>
+                  )}
+                  {!i.eUuid && i.eError && (
+                    <div className="mt-0.5">
+                      <Badge tone="bad">EDM'ye gönderilemedi</Badge>
+                    </div>
+                  )}
                 </td>
                 <td>{trDate(i.date)}</td>
                 <td>{i.customerName}</td>
@@ -222,10 +263,27 @@ export function InvoiceNewPage() {
 
 export function InvoicePage({ id }: { id: number }) {
   const { data: inv, error, reload } = useLoad(() => api.invoice(id), [id]);
+  const edm = useLoad(() => api.edmSettings(), []);
+  const toast = useToast();
+  const [edmBusy, setEdmBusy] = useState(false);
+  const [confirmSend, setConfirmSend] = useState(false);
   const [cancel, setCancel] = useState(false);
   const [pay, setPay] = useState(false);
   const [edit, setEdit] = useState(false);
   if (!inv) return <Page title="…">{<ErrorLine error={error} />}</Page>;
+  const tone = edmTone(inv.eStatus);
+  const canSend = !!edm.data?.enabled && !inv.cancelled && (!inv.eUuid || tone === 'bad' || (tone === 'none' && !!inv.eError));
+  const edmRun = async (fn: () => Promise<string>) => {
+    setEdmBusy(true);
+    try {
+      toast(await fn());
+    } catch (e) {
+      toast((e as Error).message, 'bad');
+    } finally {
+      setEdmBusy(false);
+      reload();
+    }
+  };
   return (
     <Page
       back={<Link to="/faturalar">‹ Faturalar</Link>}
@@ -238,6 +296,7 @@ export function InvoicePage({ id }: { id: number }) {
         <>
           <Link to={`/musteriler/${inv.customerId}`}>{inv.customerName}</Link> · {trDate(inv.date)} · vade {trDate(inv.dueDate)}
           {inv.daysOverdue > 0 && <span className="font-semibold text-bad"> · {inv.daysOverdue} gün gecikti</span>}
+          {inv.eSource === 'edm' && <span> · EDM'den alındı (irsaliyesiz)</span>}
         </>
       }
       actions={
@@ -248,6 +307,16 @@ export function InvoicePage({ id }: { id: number }) {
           {!inv.cancelled && inv.remaining > 0 && (
             <button className="btn btn-primary" onClick={() => setPay(true)}>
               Tahsilat gir
+            </button>
+          )}
+          {canSend && (
+            <button className="btn btn-primary" disabled={edmBusy} onClick={() => setConfirmSend(true)}>
+              {edmBusy ? 'Gönderiliyor…' : "EDM'ye gönder"}
+            </button>
+          )}
+          {edm.data?.enabled && inv.eUuid && (
+            <button className="btn" disabled={edmBusy} onClick={() => edmRun(async () => `EDM durumu: ${(await api.edmStatus(inv.id)).status || '—'}`)}>
+              EDM durumu
             </button>
           )}
           <button className="btn" onClick={() => setEdit(true)}>
@@ -265,8 +334,31 @@ export function InvoicePage({ id }: { id: number }) {
         <Stat label="Toplam" value={formatTL(inv.total)} sub={`${formatTL(inv.subtotal)} + KDV ${formatTL(inv.vatTotal)}`} />
         <Stat label="Ödenen" value={formatTL(inv.paid)} tone={inv.paid ? 'ok' : undefined} />
         <Stat label="Kalan" value={formatTL(inv.remaining)} tone={inv.remaining ? (inv.daysOverdue ? 'bad' : 'warn') : undefined} />
-        <Stat label="e-Fatura no" value={inv.eInvoiceNo ?? '—'} sub={inv.eInvoiceNo ? '' : 'Entegratörde kestikten sonra girin'} />
+        <Stat
+          label="e-Fatura no"
+          value={inv.eInvoiceNo ?? '—'}
+          sub={
+            inv.eUuid ? (
+              <span className="flex flex-wrap items-center gap-1">
+                {inv.eProfile && <span>{EDM_PROFILE[inv.eProfile] ?? inv.eProfile}</span>}
+                <Badge tone={EDM_TONE[tone].tone}>{EDM_TONE[tone].label}</Badge>
+              </span>
+            ) : edm.data?.enabled ? (
+              "EDM'ye gönderilmedi"
+            ) : (
+              'Entegratörde kestikten sonra girin'
+            )
+          }
+        />
       </div>
+      {inv.eError && <ErrorLine error={`EDM: ${inv.eError}`} />}
+      {inv.eUuid && (
+        <div className="mb-4 text-xs text-muted">
+          ETTN {inv.eUuid}
+          {inv.eStatus && ` · ${inv.eStatus}`}
+          {inv.eStatusDesc && ` · ${inv.eStatusDesc}`}
+        </div>
+      )}
       <div className="card mb-4 overflow-hidden">
         <table className="tbl">
           <thead>
@@ -307,6 +399,7 @@ export function InvoicePage({ id }: { id: number }) {
         </div>
         <div className="card p-4 text-sm">
           <div className="label">İrsaliyeler</div>
+          {!inv.dispatches.length && <div className="text-muted">İrsaliye yok</div>}
           {inv.dispatches.map((d) => (
             <div key={d.id} className="flex justify-between py-0.5">
               <Link to={`/sevkiyat/${d.id}`}>{d.no}</Link>
@@ -320,7 +413,11 @@ export function InvoicePage({ id }: { id: number }) {
       {cancel && (
         <Confirm
           title="Faturayı iptal et"
-          text="Fatura iptal edilir, irsaliyeleri tekrar faturalanabilir hale gelir. e-Fatura kesildiyse entegratörde de iptal etmeyi unutmayın."
+          text={
+            inv.eUuid
+              ? "Fatura Rozet'te iptal edilir, irsaliyeleri tekrar faturalanabilir hale gelir. Bu fatura EDM'ye gönderildi: GİB'deki e-Fatura / e-Arşiv iptali EDM portalından ayrıca yapılmalıdır."
+              : 'Fatura iptal edilir, irsaliyeleri tekrar faturalanabilir hale gelir. e-Fatura kesildiyse entegratörde de iptal etmeyi unutmayın.'
+          }
           danger
           yes="İptal et"
           onClose={() => setCancel(false)}
@@ -328,6 +425,25 @@ export function InvoicePage({ id }: { id: number }) {
             await api.cancelInvoice(inv.id);
             reload();
           }}
+        />
+      )}
+      {confirmSend && (
+        <Confirm
+          title="EDM'ye gönder"
+          text={
+            <>
+              {inv.no} · {formatTL(inv.total)} faturası {inv.customerName} için EDM'ye gönderilecek. Alıcı e-Fatura mükellefiyse e-Fatura, değilse e-Arşiv olarak kesilir ve GİB'e iletilir.
+              {edm.data?.env === 'test' && <b> (Test ortamı)</b>}
+            </>
+          }
+          yes="Gönder"
+          onClose={() => setConfirmSend(false)}
+          onYes={() =>
+            edmRun(async () => {
+              const r = await api.edmSend(inv.id);
+              return r.already ? 'Fatura EDM’de zaten vardı; bilgiler güncellendi' : `EDM'ye gönderildi${r.eInvoiceNo ? ` · ${r.eInvoiceNo}` : ''}${r.profile ? ` · ${EDM_PROFILE[r.profile] ?? r.profile}` : ''}`;
+            })
+          }
         />
       )}
       {pay && <PaymentDialog customerId={inv.customerId} amount={inv.remaining} reference={inv.no} onClose={() => setPay(false)} onSaved={reload} />}
@@ -368,5 +484,156 @@ function EditDialog({ inv, onClose, onSaved }: { inv: { id: number; eInvoiceNo: 
         <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
       </Field>
     </Modal>
+  );
+}
+
+/** EDM'deki giden faturaları Rozet'le eşleştirir ya da irsaliyesiz fatura olarak içe alır */
+export function EdmImportPage() {
+  const [from, setFrom] = useState(monthStart());
+  const [to, setTo] = useState(today());
+  const [range, setRange] = useState({ from: monthStart(), to: today() });
+  const { data, error, reload } = useLoad(() => api.edmInvoices(range), [range.from, range.to]);
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState<EdmImportResult[] | null>(null);
+  const toast = useToast();
+  const rows = data?.invoices ?? [];
+  const selectable = (r: EdmInvoice) => r.state !== 'linked' && r.tone !== 'bad' && r.currency === 'TRY';
+  useEffect(() => setSel(new Set(rows.filter(selectable).map((r) => r.uuid))), [data]);
+  const counts = { linked: rows.filter((r) => r.state === 'linked').length, candidate: rows.filter((r) => r.state === 'candidate').length, new: rows.filter((r) => r.state === 'new').length };
+  return (
+    <Page
+      title="EDM'den faturaları al"
+      back={<Link to="/faturalar">‹ Faturalar</Link>}
+      subtitle="EDM'de kesilmiş giden faturalar listelenir. Rozet'te karşılığı olanlar eşleştirilir (e-Fatura no ve ETTN yazılır); olmayanlar irsaliyesiz fatura olarak cariye işlenir, stok değişmez."
+    >
+      <div className="card mb-4 flex flex-wrap items-end gap-3 p-4">
+        <Field label="EDM'de oluşturulma: başlangıç">
+          <input type="date" className="input" value={from} onChange={(e) => setFrom(e.target.value)} />
+        </Field>
+        <Field label="Bitiş">
+          <input type="date" className="input" value={to} onChange={(e) => setTo(e.target.value)} />
+        </Field>
+        <button className="btn" onClick={() => (from === range.from && to === range.to ? reload() : setRange({ from, to }))}>
+          Listele
+        </button>
+        {data && (
+          <span className="ml-auto text-sm text-muted">
+            {rows.length} fatura · {counts.linked} bağlı · {counts.candidate} eşleşen · {counts.new} yeni
+          </span>
+        )}
+      </div>
+      <ErrorLine error={error} />
+      {results && (
+        <div className="card mb-4 p-4 text-sm">
+          <div className="label">Sonuç</div>
+          {results.map((r) => (
+            <div key={r.uuid} className={r.ok ? '' : 'text-bad'}>
+              {r.ok ? '✓' : '✗'} {r.no ? <Link to={`/faturalar/${r.invoiceId}`}>{r.no}</Link> : r.uuid}
+              {r.customerCreated && ' · yeni müşteri açıldı (müşteri kartını kontrol edin)'}
+              {r.message && ` · ${r.message}`}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="card overflow-hidden">
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th className="w-10">
+                <input
+                  type="checkbox"
+                  checked={rows.some(selectable) && rows.filter(selectable).every((r) => sel.has(r.uuid))}
+                  onChange={(e) => setSel(new Set(e.target.checked ? rows.filter(selectable).map((r) => r.uuid) : []))}
+                />
+              </th>
+              <th>EDM no</th>
+              <th>Tarih</th>
+              <th>Alıcı</th>
+              <th className="text-right">Toplam</th>
+              <th>EDM durumu</th>
+              <th>Rozet'te</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.uuid} className={r.state === 'linked' ? 'opacity-60' : ''}>
+                <td>
+                  <input
+                    type="checkbox"
+                    disabled={!selectable(r)}
+                    checked={sel.has(r.uuid)}
+                    onChange={(e) => {
+                      const n = new Set(sel);
+                      if (e.target.checked) n.add(r.uuid);
+                      else n.delete(r.uuid);
+                      setSel(n);
+                    }}
+                  />
+                </td>
+                <td className="whitespace-nowrap font-medium">
+                  {r.id || '—'}
+                  <div className="text-xs font-normal text-muted">{r.profile ? (EDM_PROFILE[r.profile] ?? r.profile) : ''}</div>
+                </td>
+                <td>{r.issueDate ? trDate(r.issueDate) : '—'}</td>
+                <td>
+                  {r.customerName ?? '—'}
+                  <div className="text-xs text-muted">{r.taxId}</div>
+                </td>
+                <td className="tabular text-right">
+                  {formatTL(r.total)}
+                  {r.currency !== 'TRY' && <div className="text-xs text-bad">{r.currency} — alınamaz</div>}
+                </td>
+                <td>
+                  <Badge tone={EDM_TONE[r.tone].tone}>{r.tone === 'bad' ? 'Hatalı' : r.tone === 'ok' ? 'Başarılı' : 'İşleniyor'}</Badge>
+                  <div className="text-xs text-muted">{r.statusDescription || r.status}</div>
+                </td>
+                <td className="text-sm">
+                  {r.state === 'linked' && r.invoice && (
+                    <>
+                      <Link to={`/faturalar/${r.invoice.id}`}>{r.invoice.no}</Link> <span className="text-muted">bağlı</span>
+                    </>
+                  )}
+                  {r.state === 'candidate' && r.invoice && (
+                    <>
+                      <Link to={`/faturalar/${r.invoice.id}`}>{r.invoice.no}</Link> <span className="text-muted">ile eşleşecek</span>
+                    </>
+                  )}
+                  {r.state === 'new' && <span>{r.customer ? `Yeni fatura · ${r.customer.name}` : 'Yeni fatura · yeni müşteri açılır'}</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {data && !rows.length && <Empty>Bu aralıkta EDM'de giden fatura yok.</Empty>}
+        {!data && !error && <Empty>EDM'den getiriliyor…</Empty>}
+      </div>
+      <div className="mt-4 flex items-center justify-end gap-3">
+        <span className="text-sm text-muted">{sel.size} fatura seçili</span>
+        <button
+          className="btn btn-primary"
+          disabled={!sel.size || busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const items = rows
+                .filter((r) => sel.has(r.uuid))
+                .map((r) => (r.state === 'candidate' && r.invoice ? { uuid: r.uuid, id: r.id, action: 'link' as const, invoiceId: r.invoice.id } : { uuid: r.uuid, id: r.id, action: 'create' as const }));
+              const { results } = await api.edmImport(items);
+              setResults(results);
+              const ok = results.filter((x) => x.ok).length;
+              toast(`${ok}/${results.length} fatura aktarıldı`, ok === results.length ? undefined : 'bad');
+              reload();
+            } catch (e) {
+              toast((e as Error).message, 'bad');
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? 'Aktarılıyor…' : 'Seçilenleri Rozet’e al'}
+        </button>
+      </div>
+    </Page>
   );
 }
