@@ -15,8 +15,18 @@ import type { Db, Queryable } from './db.js';
  * Giden fatura uygulamada kesilmiş faturayla eşleşirse (e-Fatura no ya da müşteri + tarih + tutar) cariye bir kez yazılır.
  */
 
-// Başak Rozet EDM'de portal4'te (EFaturaUI girişi portal4); başka sunucu için EDM_URL
-export const EDM_DEFAULT_URL = 'https://portal4.edmbilisim.com.tr/EFaturaEDM/EFaturaEDM.svc';
+// Başka sunucu için EDM_URL (portal4'te bu yolda servis yok: 404)
+export const EDM_DEFAULT_URL = 'https://portal2.edmbilisim.com.tr/EFaturaEDM/EFaturaEDM.svc';
+/** Tanı için denenen EDM web servis adresleri */
+export const EDM_CANDIDATES = [
+  'https://portal2.edmbilisim.com.tr/EFaturaEDM/EFaturaEDM.svc',
+  'https://interaktif.edmbilisim.com.tr/EFaturaEDM/EFaturaEDM.svc',
+  'https://portal4.edmbilisim.com.tr/EFaturaEDM/EFaturaEDM.svc',
+  'https://portal4.edmbilisim.com.tr/EFaturaEDM4/EFaturaEDM.svc',
+  'https://portal3.edmbilisim.com.tr/EFaturaEDM/EFaturaEDM.svc',
+  'https://portal1.edmbilisim.com.tr/EFaturaEDM/EFaturaEDM.svc',
+  'https://portal.edmbilisim.com.tr/EFaturaEDM/EFaturaEDM.svc',
+];
 // İstek kök öğesinin ad alanı (EDM WSDL: tempuri şeması; alt öğeler form="unqualified", yani ad alanısız)
 const NS = 'http://tempuri.org/';
 

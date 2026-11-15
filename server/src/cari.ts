@@ -190,6 +190,24 @@ export function registerCari(app: FastifyInstance, { db, edmFetcher }: { db: Db;
       d.login = (e as Error).message;
     }
     d.qualifyUsed = (await c.diag()).qualifyUsed;
+    if (d.login !== 'ok') {
+      // Hangi EDM sunucusunda servis var ve kullanıcı tanınıyor? (her biri kısa sürede)
+      const { EDM_CANDIDATES } = await import('./edm.js');
+      const tries: Record<string, string> = {};
+      await Promise.all(
+        EDM_CANDIDATES.filter((u) => u !== cfg.url).map(async (u) => {
+          const t = new EdmClient({ ...cfg, url: u }, edmFetcher);
+          try {
+            await Promise.race([t.login(), new Promise((_, rej) => setTimeout(() => rej(new Error('zaman aşımı')), 15000))]);
+            tries[u] = 'ok';
+            await t.logout();
+          } catch (e) {
+            tries[u] = (e as Error).message;
+          }
+        }),
+      );
+      d.digerSunucular = tries;
+    }
     return d;
   });
 
