@@ -340,6 +340,67 @@ const MIGRATIONS: string[] = [
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
   );
   `,
+  // 2 — e-Fatura (EDM) ve cari: tedarikçi carisi, tedarikçi ödemeleri, cari düzeltme kayıtları
+  `
+  ALTER TABLE suppliers ADD COLUMN tax_id TEXT;
+  ALTER TABLE suppliers ADD COLUMN tax_office TEXT;
+  ALTER TABLE suppliers ADD COLUMN opening_balance INTEGER NOT NULL DEFAULT 0;  -- kuruş; + biz tedarikçiye borçluyuz
+  ALTER TABLE suppliers ADD COLUMN opening_date DATE;
+  CREATE INDEX suppliers_tax_id ON suppliers(tax_id);
+  CREATE INDEX customers_tax_id ON customers(tax_id);
+
+  -- EDM'den gelen (in: alış, tedarikçi) ve giden (out: satış, müşteri) e-faturalar
+  CREATE TABLE e_invoices (
+    id           SERIAL PRIMARY KEY,
+    uuid         TEXT NOT NULL UNIQUE,                    -- ETTN
+    direction    TEXT NOT NULL CHECK (direction IN ('in','out')),
+    no           TEXT NOT NULL,
+    date         DATE NOT NULL,
+    type         TEXT,                                    -- SATIS, IADE, TEVKIFAT…
+    profile      TEXT,                                    -- TEMELFATURA, TICARIFATURA, EARSIVFATURA…
+    party_tax_id TEXT,
+    party_name   TEXT,
+    currency     TEXT NOT NULL DEFAULT 'TRY',
+    fx_rate      NUMERIC(14,6),
+    subtotal     INTEGER NOT NULL DEFAULT 0,              -- kuruş, TL
+    vat_total    INTEGER NOT NULL DEFAULT 0,
+    total        INTEGER NOT NULL,                        -- ödenecek tutar, TL kuruş (iade: yine pozitif)
+    status       TEXT,
+    customer_id  INTEGER REFERENCES customers(id),
+    supplier_id  INTEGER REFERENCES suppliers(id),
+    invoice_id   INTEGER REFERENCES invoices(id) ON DELETE SET NULL,   -- uygulamada kesilmiş fatura ile eşleşti (cariye bir kez)
+    cancelled    BOOLEAN NOT NULL DEFAULT FALSE,
+    fetched_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  CREATE INDEX e_invoices_customer ON e_invoices(customer_id);
+  CREATE INDEX e_invoices_supplier ON e_invoices(supplier_id);
+  CREATE INDEX e_invoices_date ON e_invoices(date);
+
+  CREATE TABLE supplier_payments (
+    id          SERIAL PRIMARY KEY,
+    supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+    date        DATE NOT NULL,
+    amount      INTEGER NOT NULL CHECK (amount > 0),
+    method      TEXT NOT NULL DEFAULT 'havale' CHECK (method IN ('havale','nakit','kart','cek','diger')),
+    reference   TEXT,
+    note        TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  CREATE INDEX supplier_payments_supplier ON supplier_payments(supplier_id);
+
+  -- Cari düzeltme: kullanmaya başlarken o anki borç / alacağı oturtmak için (ya da sonradan düzeltme)
+  -- amount: + müşteri için bize borcu artırır; tedarikçi için bizim borcumuzu artırır
+  CREATE TABLE cari_adjustments (
+    id          SERIAL PRIMARY KEY,
+    customer_id INTEGER REFERENCES customers(id),
+    supplier_id INTEGER REFERENCES suppliers(id),
+    date        DATE NOT NULL,
+    amount      INTEGER NOT NULL,
+    note        TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK ((customer_id IS NULL) <> (supplier_id IS NULL))
+  );
+  `,
 ];
 
 async function migrate(db: Db, MIGRATIONS: string[]) {

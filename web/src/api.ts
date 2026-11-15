@@ -293,7 +293,68 @@ export interface Payment {
 export interface Statement {
   customer: { id: number; name: string; balance: number };
   opening: number;
-  rows: { date: string; kind: 'opening' | 'invoice' | 'payment'; ref: string; description: string | null; debit: number; credit: number; refId: number | null; balance: number }[];
+  rows: StatementRow[];
+}
+export interface StatementRow {
+  date: string;
+  kind: 'opening' | 'invoice' | 'payment' | 'einvoice' | 'adjust';
+  ref: string;
+  description: string | null;
+  debit: number;
+  credit: number;
+  refId: number | null;
+  balance: number;
+}
+export interface SupplierStatement {
+  supplier: { id: number; name: string; taxId: string | null; balance: number };
+  opening: number;
+  rows: StatementRow[];
+}
+export interface SupplierBalance {
+  id: number;
+  name: string;
+  kind: Supplier['kind'];
+  taxId: string | null;
+  balance: number;
+  invoiceCount: number;
+}
+export interface EInvoice {
+  id: number;
+  uuid: string;
+  direction: 'in' | 'out';
+  no: string;
+  date: string;
+  type: string | null;
+  profile: string | null;
+  partyTaxId: string | null;
+  partyName: string | null;
+  currency: string;
+  subtotal: number;
+  vatTotal: number;
+  total: number;
+  status: string | null;
+  cancelled: boolean;
+  customerId: number | null;
+  supplierId: number | null;
+  invoiceId: number | null;
+  invoiceNo: string | null;
+  accountName: string | null;
+}
+export interface EdmSyncResult {
+  in: number;
+  out: number;
+  new: number;
+  updated: number;
+  newCustomers: number;
+  newSuppliers: number;
+  matched: number;
+  errors: string[];
+}
+export interface EdmStatus {
+  configured: boolean;
+  user: boolean;
+  password: boolean;
+  last: (EdmSyncResult & { at: string; from: string; to: string }) | null;
 }
 export interface PromoExpense {
   id: number;
@@ -445,6 +506,16 @@ export const api = {
   deleteMove: (id: number) => req('DELETE', `/api/stock-moves/${id}`),
 
   suppliers: () => req<Supplier[]>('GET', '/api/suppliers'),
+  supplierBalances: () => req<SupplierBalance[]>('GET', '/api/suppliers/balances'),
+  supplierStatement: (id: number, o: { from?: string; to?: string } = {}) => req<SupplierStatement>('GET', `/api/suppliers/${id}/statement${qs(o)}`),
+  addSupplierPayment: (b: { supplierId: number; date: string; amount: number; method: PayMethod; reference?: string | null; note?: string | null }) => req<{ id: number }>('POST', '/api/supplier-payments', b),
+  deleteSupplierPayment: (id: number) => req('DELETE', `/api/supplier-payments/${id}`),
+  addAdjustment: (b: { customerId?: number; supplierId?: number; date: string; targetBalance?: number; amount?: number; note?: string | null }) =>
+    req<{ id?: number; amount: number }>('POST', '/api/adjustments', b),
+  deleteAdjustment: (id: number) => req('DELETE', `/api/adjustments/${id}`),
+  eInvoices: (o: { direction?: 'in' | 'out'; from?: string; to?: string; q?: string } = {}) => req<EInvoice[]>('GET', `/api/e-invoices${qs(o)}`),
+  edmStatus: () => req<EdmStatus>('GET', '/api/edm/status'),
+  edmSync: (from: string, to: string) => req<EdmSyncResult>('POST', '/api/edm/sync', { from, to }),
   saveSupplier: (id: number | null, b: Omit<Supplier, 'id' | 'lotCount'>) => req<{ id: number }>(id ? 'PUT' : 'POST', id ? `/api/suppliers/${id}` : '/api/suppliers', b),
   lots: () => req<LotSummary[]>('GET', '/api/lots'),
   lot: (id: number) => req<LotDetail>('GET', `/api/lots/${id}`),

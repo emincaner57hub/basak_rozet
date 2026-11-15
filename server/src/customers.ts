@@ -73,6 +73,20 @@ export const BALANCE_SQL = `(
   c.opening_balance
   + COALESCE((SELECT SUM(i.total) FROM invoices i WHERE i.customer_id = c.id AND NOT i.cancelled AND (c.opening_date IS NULL OR i.date >= c.opening_date)), 0)
   - COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.customer_id = c.id AND (c.opening_date IS NULL OR p.date >= c.opening_date)), 0)
+  + COALESCE((SELECT SUM(CASE WHEN e.type = 'IADE' THEN -e.total ELSE e.total END) FROM e_invoices e
+              WHERE e.customer_id = c.id AND e.direction = 'out' AND e.invoice_id IS NULL AND NOT e.cancelled AND (c.opening_date IS NULL OR e.date >= c.opening_date)), 0)
+  + COALESCE((SELECT SUM(a.amount) FROM cari_adjustments a WHERE a.customer_id = c.id AND (c.opening_date IS NULL OR a.date >= c.opening_date)), 0)
+)`;
+
+/**
+ * Tedarikçi cari bakiyesi (s = suppliers): açılış + gelen e-faturalar − ödemeler + düzeltmeler. + = biz borçluyuz.
+ */
+export const SUPPLIER_BALANCE_SQL = `(
+  s.opening_balance
+  + COALESCE((SELECT SUM(CASE WHEN e.type = 'IADE' THEN -e.total ELSE e.total END) FROM e_invoices e
+              WHERE e.supplier_id = s.id AND e.direction = 'in' AND NOT e.cancelled AND (s.opening_date IS NULL OR e.date >= s.opening_date)), 0)
+  - COALESCE((SELECT SUM(p.amount) FROM supplier_payments p WHERE p.supplier_id = s.id AND (s.opening_date IS NULL OR p.date >= s.opening_date)), 0)
+  + COALESCE((SELECT SUM(a.amount) FROM cari_adjustments a WHERE a.supplier_id = s.id AND (s.opening_date IS NULL OR a.date >= s.opening_date)), 0)
 )`;
 
 const customerSchema = z

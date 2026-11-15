@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { api, PAY_METHOD, type PayMethod } from '../api';
+import { api, PAY_METHOD, type PayMethod, type StatementRow } from '../api';
+import { AdjustDialog, StatementTable } from './Cari';
 import { Link, useNav } from '../router';
 import { Confirm, Empty, ErrorLine, Field, Modal, MoneyInput, Page, SearchSelect, useLoad, useToast } from '../ui';
 import { formatTL, monthStart, today, trDate } from '../money';
@@ -153,62 +154,53 @@ export function PaymentDialog({ customerId, amount, reference, onClose, onSaved 
   );
 }
 
-/** Cari ekstre (müşteri sayfasında) */
+/** Cari ekstre (müşteri sayfasında): faturalar, e-faturalar (EDM), tahsilatlar, düzeltmeler */
 export function StatementView({ customerId }: { customerId: number }) {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const { data, reload } = useLoad(() => api.statement(customerId, { from: from || undefined, to: to || undefined }), [customerId, from, to]);
   const [adding, setAdding] = useState(false);
+  const [adjusting, setAdjusting] = useState(false);
+  const [del, setDel] = useState<StatementRow | null>(null);
   const { go } = useNav();
   return (
     <div>
-      <div className="mb-3 flex items-center gap-2">
-        <input type="date" className="input w-40" value={from} onChange={(e) => setFrom(e.target.value)} />
-        <span className="text-muted">–</span>
-        <input type="date" className="input w-40" value={to} onChange={(e) => setTo(e.target.value)} />
-        <button className="btn ml-auto" onClick={() => window.print()}>
-          Yazdır
-        </button>
-        <button className="btn btn-primary" onClick={() => setAdding(true)}>
-          + Tahsilat
-        </button>
-      </div>
-      <div className="card overflow-hidden">
-        <table className="tbl">
-          <thead>
-            <tr>
-              <th>Tarih</th>
-              <th>Belge</th>
-              <th>Açıklama</th>
-              <th className="text-right">Borç</th>
-              <th className="text-right">Alacak</th>
-              <th className="text-right">Bakiye</th>
-            </tr>
-          </thead>
-          <tbody>
-            {from && data && (
-              <tr>
-                <td colSpan={5} className="text-muted">
-                  Dönem başı
-                </td>
-                <td className="tabular text-right">{formatTL(data.opening)}</td>
-              </tr>
-            )}
-            {data?.rows.map((r, i) => (
-              <tr key={i} className={r.kind === 'invoice' ? 'clickable' : ''} onClick={() => r.kind === 'invoice' && r.refId && go(`/faturalar/${r.refId}`)}>
-                <td>{trDate(r.date)}</td>
-                <td className="font-medium">{r.kind === 'payment' ? PAY_METHOD[r.ref as PayMethod] ?? r.ref : r.ref}</td>
-                <td className="text-sm text-muted">{r.kind === 'invoice' ? (r.description ? `e-Fatura ${r.description}` : 'Fatura') : (r.description ?? '')}</td>
-                <td className="tabular text-right">{r.debit ? formatTL(r.debit) : ''}</td>
-                <td className="tabular text-right">{r.credit ? formatTL(r.credit) : ''}</td>
-                <td className="tabular text-right font-medium">{formatTL(r.balance)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {data && !data.rows.length && <Empty>Hareket yok.</Empty>}
-      </div>
+      <StatementTable
+        rows={data?.rows}
+        opening={from ? data?.opening : undefined}
+        from={from}
+        to={to}
+        setFrom={setFrom}
+        setTo={setTo}
+        onRow={(r) => r.kind === 'invoice' && r.refId && go(`/faturalar/${r.refId}`)}
+        onDelete={(r) => setDel(r)}
+        actions={
+          <>
+            <button className="btn" onClick={() => setAdjusting(true)}>
+              Bakiye düzeltme
+            </button>
+            <button className="btn btn-primary" onClick={() => setAdding(true)}>
+              + Tahsilat
+            </button>
+          </>
+        }
+      />
       {adding && <PaymentDialog customerId={customerId} onClose={() => setAdding(false)} onSaved={reload} />}
+      {adjusting && <AdjustDialog target={{ customerId }} current={data?.customer.balance ?? 0} onClose={() => setAdjusting(false)} onSaved={reload} />}
+      {del && (
+        <Confirm
+          title={del.kind === 'payment' ? 'Tahsilatı sil' : 'Düzeltmeyi sil'}
+          text={`${trDate(del.date)} · ${formatTL(del.debit || del.credit)}`}
+          danger
+          yes="Sil"
+          onClose={() => setDel(null)}
+          onYes={async () => {
+            if (del.kind === 'payment') await api.deletePayment(del.refId!);
+            else await api.deleteAdjustment(del.refId!);
+            reload();
+          }}
+        />
+      )}
     </div>
   );
 }

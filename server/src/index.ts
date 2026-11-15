@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { getSetting, openDb, setSetting } from './db.js';
 import { buildApp } from './app.js';
+import { startEdmSchedule } from './cari.js';
 import { ensureAdmin, hashPassword } from './auth.js';
 import { seedDemo } from './seed.js';
 
@@ -49,6 +50,7 @@ await app.ready();
 if (process.env.SEED === '1' || (!production && process.env.SEED !== '0')) await seedDemo(db, app, adminEmail!, adminPassword!);
 
 await app.listen({ port, host: '0.0.0.0' });
+if (production) startEdmSchedule(db); // EDM tanımlıysa saatlik e-fatura eşitleme
 console.log(`Başak Rozet: http://localhost:${port}  (veritabanı: ${db.kind})`);
 
 const shutdown = async () => {

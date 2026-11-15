@@ -238,6 +238,13 @@ export function registerInvoices(app: FastifyInstance, { db, now }: { db: Db; no
          UNION ALL
          SELECT p.date, 'payment', p.method, NULLIF(concat_ws(' · ', p.reference, p.note), ''), 0, p.amount, p.id, p.id
            FROM payments p WHERE p.customer_id = $1
+         UNION ALL
+         SELECT e.date, 'einvoice', e.no, concat_ws(' · ', 'e-Fatura (EDM)', NULLIF(e.type, 'SATIS')),
+                CASE WHEN e.type = 'IADE' THEN 0 ELSE e.total END, CASE WHEN e.type = 'IADE' THEN e.total ELSE 0 END, e.id, e.id
+           FROM e_invoices e WHERE e.customer_id = $1 AND e.direction = 'out' AND e.invoice_id IS NULL AND NOT e.cancelled
+         UNION ALL
+         SELECT a.date, 'adjust', 'Düzeltme', a.note, GREATEST(a.amount, 0), GREATEST(-a.amount, 0), a.id, a.id
+           FROM cari_adjustments a WHERE a.customer_id = $1
        ) x WHERE $2::date IS NULL OR x.date >= $2::date ORDER BY date, kind DESC, ord`,
       [id, c.opening_date],
     );

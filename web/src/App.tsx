@@ -13,6 +13,7 @@ import { LotsPage, LotPage } from './pages/Lots';
 import { ReportsPage } from './pages/Reports';
 import { SettingsPage } from './pages/Settings';
 import { PrintDispatch, PrintInvoice } from './pages/Print';
+import { EInvoicesPage, SuppliersCariPage, SupplierCariPage } from './pages/Cari';
 
 const NAV: { to: string; label: string; icon: string; group?: string }[] = [
   { to: '/', label: 'Panel', icon: '◧' },
@@ -20,6 +21,8 @@ const NAV: { to: string; label: string; icon: string; group?: string }[] = [
   { to: '/sevkiyat', label: 'İrsaliyeler', icon: '⇪', group: 'Satış' },
   { to: '/faturalar', label: 'Faturalar', icon: '₺', group: 'Satış' },
   { to: '/tahsilat', label: 'Tahsilat', icon: '⇩', group: 'Satış' },
+  { to: '/e-fatura', label: 'e-Fatura (EDM)', icon: '⇄', group: 'Satış' },
+  { to: '/tedarikciler', label: 'Tedarikçi cari', icon: '⇧', group: 'Kayıtlar' },
   { to: '/musteriler', label: 'Müşteriler', icon: '☕', group: 'Kayıtlar' },
   { to: '/urunler', label: 'Ürünler ve stok', icon: '✪', group: 'Kayıtlar' },
   { to: '/alimlar', label: 'Alımlar', icon: '✈', group: 'Kayıtlar' },
@@ -45,6 +48,9 @@ function Routes() {
   else if (m('/faturalar/yeni')) page = <InvoiceNewPage />;
   else if ((r = m('/faturalar/:id'))) page = <InvoicePage id={Number(r.id)} />;
   else if (m('/tahsilat')) page = <PaymentsPage />;
+  else if (m('/e-fatura')) page = <EInvoicesPage />;
+  else if (m('/tedarikciler')) page = <SuppliersCariPage />;
+  else if ((r = m('/tedarikciler/:id'))) page = <SupplierCariPage id={Number(r.id)} />;
   else if (m('/musteriler')) page = <CustomersPage />;
   else if ((r = m('/musteriler/:id'))) page = <CustomerPage id={Number(r.id)} />;
   else if (m('/urunler')) page = <ProductsPage />;
