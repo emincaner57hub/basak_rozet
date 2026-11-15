@@ -30,9 +30,9 @@ function fakeEdm(invoices: { dir: 'IN' | 'OUT'; ubl: string; uuid: string; no: s
     if (body.includes('LoginRequest')) {
       if (!body.includes('<PASSWORD>dogru</PASSWORD>'))
         return { status: 500, text: async () => `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><faultcode>s:Client</faultcode><faultstring>Kullanıcı adı veya şifre hatalı</faultstring></s:Fault></s:Body></s:Envelope>` };
-      return env(`<LoginResponse xmlns="http://schemas.i2i.com/ei/wsdl"><SESSION_ID xmlns="">abc-123</SESSION_ID></LoginResponse>`);
+      return env(`<LoginResponse xmlns="http://tempuri.org/"><SESSION_ID xmlns="">abc-123</SESSION_ID></LoginResponse>`);
     }
-    if (body.includes('LogoutRequest')) return env(`<LogoutResponse xmlns="http://schemas.i2i.com/ei/wsdl"><REQUEST_RETURN xmlns=""><RETURN_CODE>0</RETURN_CODE></REQUEST_RETURN></LogoutResponse>`);
+    if (body.includes('LogoutRequest')) return env(`<LogoutResponse xmlns="http://tempuri.org/"><REQUEST_RETURN xmlns=""><RETURN_CODE>0</RETURN_CODE></REQUEST_RETURN></LogoutResponse>`);
     if (body.includes('GetInvoiceRequest')) {
       expect(body).toContain('<SESSION_ID>abc-123</SESSION_ID>');
       const dir = body.includes('<DIRECTION>IN</DIRECTION>') ? 'IN' : 'OUT';
@@ -40,7 +40,7 @@ function fakeEdm(invoices: { dir: 'IN' | 'OUT'; ubl: string; uuid: string; no: s
       const to = body.match(/<END_DATE>(\d{4}-\d{2}-\d{2})/)![1];
       const list = invoices.filter((i) => i.dir === dir && (() => { const d = parseUbl(i.ubl).date; return d >= from && d <= to; })());
       return env(
-        `<GetInvoiceResponse xmlns="http://schemas.i2i.com/ei/wsdl">` +
+        `<GetInvoiceResponse xmlns="http://tempuri.org/">` +
           list
             .map((i) => `<INVOICE xmlns="" ID="${i.no}" UUID="${i.uuid}"><HEADER><STATUS>${i.status ?? 'SUCCEED'}</STATUS><PAYABLE_AMOUNT currencyID="TRY">1</PAYABLE_AMOUNT></HEADER><CONTENT>${Buffer.from(i.ubl).toString('base64')}</CONTENT></INVOICE>`)
             .join('') +
@@ -160,7 +160,7 @@ describe('EDM e-fatura ve cari', () => {
 });
 
 describe('EDM istek biçimi', () => {
-  const NSX = 'http://schemas.i2i.com/ei/wsdl';
+  const NSX = 'http://tempuri.org/';
   const nullRef = { status: 500, text: async () => `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><faultcode>s:Server</faultcode><faultstring>Object reference not set to an instance of an object.</faultstring></s:Fault></s:Body></s:Envelope>` };
   const ok = { status: 200, text: async () => `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><LoginResponse xmlns="${NSX}"><SESSION_ID>s-1</SESSION_ID></LoginResponse></s:Body></s:Envelope>` };
 
@@ -178,9 +178,10 @@ describe('EDM istek biçimi', () => {
     expect((await c.diag()).qualifyUsed).toBe(true);
   });
 
-  it('WSDL nitelikli diyorsa ve giriş öğesi adı farklıysa ona uyar', async () => {
+  it('EDM WSDL biçimi: tempuri kök, ad alanısız alt öğeler, SOAPAction WSDL\'den', async () => {
     const { EdmClient } = await import('../src/edm.js');
-    const wsdl = `<wsdl:definitions><wsdl:types><xs:schema elementFormDefault="qualified" targetNamespace="${NSX}"><xs:element name="LoginRequest"><xs:complexType><xs:sequence><xs:element name="REQUEST_HEADER"/><xs:element name="USER_NAME"/><xs:element name="PASSWORD"/></xs:sequence></xs:complexType></xs:element></xs:schema></wsdl:types>
+    // EDM portal2 WSDL'sinin biçimi: şema "qualified", alt öğeler form="unqualified"
+    const wsdl = `<wsdl:definitions><wsdl:types><xs:schema elementFormDefault="qualified" targetNamespace="${NSX}"><xs:element name="LoginRequest" type="tns:LoginRequest"/><xs:complexType name="LoginRequest"><xs:complexContent mixed="false"><xs:extension base="tns:REQUEST"><xs:sequence><xs:element minOccurs="0" maxOccurs="1" form="unqualified" name="USER_NAME" type="xs:string"/><xs:element minOccurs="0" maxOccurs="1" form="unqualified" name="PASSWORD" type="xs:string"/></xs:sequence></xs:extension></xs:complexContent></xs:complexType></xs:schema></wsdl:types>
       <wsdl:message name="LoginMsg"><wsdl:part name="p" element="tns:LoginRequest"/></wsdl:message>
       <wsdl:portType name="P"><wsdl:operation name="Login"><wsdl:input message="tns:LoginMsg"/></wsdl:operation></wsdl:portType>
       <wsdl:binding><wsdl:operation name="Login"><soap:operation soapAction="urn:Login" style="document"/></wsdl:operation></wsdl:binding></wsdl:definitions>`;
@@ -194,7 +195,7 @@ describe('EDM istek biçimi', () => {
     const c = new EdmClient({ url: 'https://x/e.svc', user: 'u', password: 'p' }, f);
     await c.login();
     expect(bodies).toHaveLength(1);
-    expect(bodies[0]).toContain(`<LoginRequest xmlns="${NSX}"><REQUEST_HEADER>`);
-    expect(await c.diag()).toMatchObject({ elementFormDefault: 'qualified', loginElement: 'LoginRequest', loginAction: 'urn:Login' });
+    expect(bodies[0]).toContain(`<ns:LoginRequest xmlns:ns="${NSX}"><REQUEST_HEADER>`);
+    expect(await c.diag()).toMatchObject({ elementFormDefault: 'unqualified', loginElement: 'LoginRequest', loginAction: 'urn:Login' });
   });
 });

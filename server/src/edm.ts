@@ -16,7 +16,8 @@ import type { Db, Queryable } from './db.js';
  */
 
 export const EDM_DEFAULT_URL = 'https://portal2.edmbilisim.com.tr/EFaturaEDM/EFaturaEDM.svc';
-const NS = 'http://schemas.i2i.com/ei/wsdl';
+// İstek kök öğesinin ad alanı (EDM WSDL: tempuri şeması; alt öğeler form="unqualified", yani ad alanısız)
+const NS = 'http://tempuri.org/';
 
 export type Fetcher = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<{ status: number; text(): Promise<string> }>;
 
@@ -67,12 +68,9 @@ export class EdmClient {
         const names = [...m[1].matchAll(/<xs:element[^>]*\bname="(\w+)"/g)].map((x) => x[1]);
         if (names.length) orders.push(names);
       }
-      // Ad alanı kuralı: hedef ad alanı NS olan şemada elementFormDefault
-      for (const m of t.matchAll(/<xs:schema\b([^>]*)>/g)) {
-        if (!m[1].includes(NS)) continue;
-        const f = m[1].match(/elementFormDefault="(\w+)"/)?.[1];
-        if (f) qualified = f === 'qualified';
-      }
+      // Ad alanı kuralı: şema "qualified" dese de EDM alt öğeleri tek tek form="unqualified" tanımlar
+      const loginSeg = t.match(/<xs:complexType name="LoginRequest">[\s\S]*?<\/xs:complexType>/)?.[0] ?? '';
+      if (/name="USER_NAME"/.test(loginSeg)) qualified = !/form="unqualified"[^>]*name="USER_NAME"|name="USER_NAME"[^>]*form="unqualified"/.test(loginSeg) && /elementFormDefault="qualified"/.test(t);
       // İşlemin giriş öğesi (ör. Login → LoginRequest): portType işlemi → mesaj → part element
       const msgEl = new Map<string, string>();
       for (const m of t.matchAll(/<wsdl:message name="(\w+)">\s*<wsdl:part[^>]*\belement="(?:\w+:)?(\w+)"/g)) msgEl.set(m[1], m[2]);
@@ -197,8 +195,8 @@ export class EdmClient {
   async invoices(direction: 'IN' | 'OUT', from: string, to: string, limit = 1000): Promise<EdmInvoice[]> {
     const key: Node[] = this.ordered([
       ['LIMIT', String(limit)],
-      ['START_DATE', `${from}T00:00:00`],
-      ['END_DATE', `${to}T23:59:59`],
+      ['START_DATE', from], // xs:date
+      ['END_DATE', to],
       ['READ_INCLUDED', 'true'],
       ['DIRECTION', direction],
     ]);
