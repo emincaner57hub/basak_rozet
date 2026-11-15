@@ -23,6 +23,8 @@ export function EInvoicesPage() {
   const [syncErr, setSyncErr] = useState('');
   const toast = useToast();
   const st = status.data;
+  const [diag, setDiag] = useState<Record<string, unknown> | null>(null);
+  const [diagBusy, setDiagBusy] = useState(false);
   const live = (data ?? []).filter((e) => !e.cancelled);
   const sum = (k: 'subtotal' | 'vatTotal' | 'total') => live.reduce((s, e) => s + (e.type === 'IADE' ? -e[k] : e[k]), 0);
   return (
@@ -64,6 +66,27 @@ export function EInvoicesPage() {
         </div>
       )}
       <ErrorLine error={syncErr || error} />
+      {st?.configured && (
+        <div className="mb-3 text-sm">
+          <button
+            className="btn"
+            disabled={diagBusy}
+            onClick={async () => {
+              setDiagBusy(true);
+              try {
+                setDiag(await api.edmDiag());
+              } catch (e) {
+                setDiag({ hata: (e as Error).message });
+              } finally {
+                setDiagBusy(false);
+              }
+            }}
+          >
+            {diagBusy ? 'Deneniyor…' : '🔌 EDM bağlantısını test et'}
+          </button>
+          {diag && <pre className="card mt-2 overflow-x-auto whitespace-pre-wrap p-3 text-xs">{JSON.stringify(diag, null, 2)}</pre>}
+        </div>
+      )}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <Tabs
           value={dir}

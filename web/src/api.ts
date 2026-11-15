@@ -515,6 +515,7 @@ export const api = {
   deleteAdjustment: (id: number) => req('DELETE', `/api/adjustments/${id}`),
   eInvoices: (o: { direction?: 'in' | 'out'; from?: string; to?: string; q?: string } = {}) => req<EInvoice[]>('GET', `/api/e-invoices${qs(o)}`),
   edmStatus: () => req<EdmStatus>('GET', '/api/edm/status'),
+  edmDiag: () => req<Record<string, unknown>>('GET', '/api/edm/diag'),
   edmSync: (from: string, to: string) => req<EdmSyncResult>('POST', '/api/edm/sync', { from, to }),
   saveSupplier: (id: number | null, b: Omit<Supplier, 'id' | 'lotCount'>) => req<{ id: number }>(id ? 'PUT' : 'POST', id ? `/api/suppliers/${id}` : '/api/suppliers', b),
   lots: () => req<LotSummary[]>('GET', '/api/lots'),
