@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, COST_LABEL, LOT_KIND, SUPPLIER_KIND, type CostType, type LotDetail, type LotInput, type Supplier } from '../api';
+import { api, COST_LABEL, LOT_KIND, SUPPLIER_KIND, COST_TYPE_LABEL, type CostType, type LotDetail, type LotInput, type Supplier } from '../api';
 import { Link, useNav } from '../router';
 import { Badge, Confirm, Empty, ErrorLine, Field, IntInput, Modal, MoneyInput, Page, SearchSelect, Stat, useLoad, useToast } from '../ui';
 import { decText, fmtNum, formatTL, formatUnit, parseDec, today, trDate } from '../money';
@@ -88,8 +88,10 @@ function SuppliersDialog({ onClose }: { onClose: () => void }) {
           {data?.map((s) => (
             <tr key={s.id} className="clickable" onClick={() => setEdit(s)}>
               <td className="font-medium">{s.name}</td>
-              <td className="text-xs text-muted">{SUPPLIER_KIND[s.kind]}</td>
-              <td className="text-xs text-muted">{s.contact}</td>
+              <td className="text-xs text-muted">
+                {SUPPLIER_KIND[s.kind]} · {COST_TYPE_LABEL[s.costType]}
+              </td>
+              <td className="text-xs text-muted">{[s.contactName, s.phone, s.contact].filter(Boolean).join(' · ')}</td>
               <td className="text-right text-xs">{s.lotCount} parti</td>
             </tr>
           ))}
@@ -116,6 +118,9 @@ function SupplierForm({ initial, onDone }: { initial: Partial<Supplier>; onDone:
   const [name, setName] = useState(initial.name ?? '');
   const [kind, setKind] = useState<Supplier['kind']>(initial.kind ?? 'china');
   const [contact, setContact] = useState(initial.contact ?? '');
+  const [costType, setCostType] = useState<Supplier['costType']>(initial.costType ?? 'direct');
+  const [phone, setPhone] = useState(initial.phone ?? '');
+  const [contactName, setContactName] = useState(initial.contactName ?? '');
   const [err, setErr] = useState('');
   return (
     <div className="rounded-xl bg-paper p-3">
@@ -132,8 +137,23 @@ function SupplierForm({ initial, onDone }: { initial: Partial<Supplier>; onDone:
             ))}
           </select>
         </Field>
-        <Field label="İletişim">
-          <input className="input" value={contact} onChange={(e) => setContact(e.target.value)} />
+        <Field label="Maliyet türü">
+          <select className="input" value={costType} onChange={(e) => setCostType(e.target.value as Supplier['costType'])}>
+            {(Object.keys(COST_TYPE_LABEL) as Supplier['costType'][]).map((k) => (
+              <option key={k} value={k}>
+                {COST_TYPE_LABEL[k]}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Yetkili kişi">
+          <input className="input" value={contactName} onChange={(e) => setContactName(e.target.value)} />
+        </Field>
+        <Field label="Telefon">
+          <input className="input" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
+        </Field>
+        <Field label="Diğer iletişim">
+          <input className="input" value={contact} placeholder="e-posta, WeChat…" onChange={(e) => setContact(e.target.value)} />
         </Field>
       </div>
       {err && <p className="mt-2 text-sm text-bad">{err}</p>}
@@ -146,7 +166,16 @@ function SupplierForm({ initial, onDone }: { initial: Partial<Supplier>; onDone:
           disabled={!name.trim()}
           onClick={async () => {
             try {
-              await api.saveSupplier(initial.id ?? null, { name, kind, contact: contact || null, note: initial.note ?? null, active: initial.active ?? true });
+              await api.saveSupplier(initial.id ?? null, {
+                name,
+                kind,
+                contact: contact || null,
+                costType,
+                phone: phone || null,
+                contactName: contactName || null,
+                note: initial.note ?? null,
+                active: initial.active ?? true,
+              });
               onDone();
             } catch (e) {
               setErr((e as Error).message);

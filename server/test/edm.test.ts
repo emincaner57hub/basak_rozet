@@ -151,6 +151,33 @@ describe('EDM e-fatura ve cari', () => {
     expect(sSt.rows.at(-1)).toMatchObject({ kind: 'payment', debit: 100000, balance: 400000 });
   });
 
+  it('elle alış / satış kaydı, tedarikçi türü; EDM satışı faturalı', async () => {
+    await req('POST', '/api/edm/sync', { from: '2026-11-01', to: '2026-11-07' });
+    const out = await req<any[]>('GET', '/api/e-invoices?direction=out');
+    expect(out.every((e) => e.saleKind === 'faturali' && e.source === 'edm')).toBe(true);
+
+    const sup = await req('POST', '/api/suppliers', { name: 'Matbaa', kind: 'local', costType: 'invoice', phone: '0532 000 00 00', contactName: 'Ali Bey' });
+    const list = await req<any[]>('GET', '/api/suppliers');
+    expect(list.find((x) => x.id === sup.id)).toMatchObject({ costType: 'invoice', phone: '0532 000 00 00', contactName: 'Ali Bey' });
+
+    const cus = await req('POST', '/api/customers', { name: 'Elle Kafe', kind: 'single' });
+    const sale = await req('POST', '/api/e-invoices', { direction: 'out', date: '2026-11-08', customerId: cus.id, saleKind: 'kdvli', subtotal: 100000, vatTotal: 20000, note: 'nakit' });
+    const buy = await req('POST', '/api/e-invoices', { direction: 'in', date: '2026-11-08', supplierId: sup.id, subtotal: 50000, vatTotal: 10000 });
+    expect((await req('GET', `/api/customers/${cus.id}/statement`)).customer.balance).toBe(120000);
+    expect((await req<any[]>('GET', '/api/suppliers/balances')).find((x) => x.id === sup.id).balance).toBe(60000);
+    const row = (await req<any[]>('GET', '/api/e-invoices?direction=out')).find((e) => e.id === sale.id);
+    expect(row).toMatchObject({ source: 'manual', saleKind: 'kdvli', total: 120000, accountName: 'Elle Kafe' });
+
+    await req('PUT', `/api/e-invoices/${buy.id}`, { direction: 'in', date: '2026-11-08', supplierId: sup.id, subtotal: 40000, vatTotal: 8000 });
+    expect((await req<any[]>('GET', '/api/suppliers/balances')).find((x) => x.id === sup.id).balance).toBe(48000);
+    await req('DELETE', `/api/e-invoices/${buy.id}`);
+    expect((await req<any[]>('GET', '/api/suppliers/balances')).find((x) => x.id === sup.id).balance).toBe(0);
+    // EDM'den geleni silemez / değiştiremez
+    await expect(req('DELETE', `/api/e-invoices/${out[0].id}`)).rejects.toMatchObject({ status: 400 });
+    // satışta müşteri şart
+    await expect(req('POST', '/api/e-invoices', { direction: 'out', date: '2026-11-08', subtotal: 1, vatTotal: 0 })).rejects.toMatchObject({ status: 400 });
+  });
+
   it('yanlış şifre anlaşılır hata verir', async () => {
     process.env.EDM_PASSWORD = 'yanlis';
     const r = await app.inject({ method: 'POST', url: '/api/edm/sync', payload: { from: '2026-11-01', to: '2026-11-02' }, headers: { cookie } });

@@ -15,7 +15,7 @@ export function registerCari(app: FastifyInstance, { db, edmFetcher }: { db: Db;
   // ---- Tedarikçi carisi ----
   app.get('/api/suppliers/balances', async () =>
     db.query(
-      `SELECT s.id, s.name, s.kind, s.tax_id "taxId", ${SUPPLIER_BALANCE_SQL} balance,
+      `SELECT s.id, s.name, s.kind, s.cost_type "costType", s.tax_id "taxId", ${SUPPLIER_BALANCE_SQL} balance,
               (SELECT COUNT(*) FROM e_invoices e WHERE e.supplier_id = s.id) "invoiceCount"
        FROM suppliers s ORDER BY s.active DESC, s.name`,
     ),
@@ -32,7 +32,7 @@ export function registerCari(app: FastifyInstance, { db, edmFetcher }: { db: Db;
     // credit = tedarikçinin alacağı (fatura), debit = ödememiz; bakiye + = biz borçluyuz
     const rows = await db.query<{ date: string; kind: string; ref: string; description: string | null; debit: number; credit: number; refId: number | null }>(
       `SELECT * FROM (
-         SELECT e.date, 'einvoice' kind, e.no ref, concat_ws(' · ', 'e-Fatura', NULLIF(e.type, 'SATIS')) description,
+         SELECT e.date, 'einvoice' kind, e.no ref, concat_ws(' · ', CASE WHEN e.source = 'manual' THEN 'Elle kayıt' ELSE 'e-Fatura' END, NULLIF(e.type, 'SATIS'), e.note) description,
                 CASE WHEN e.type = 'IADE' THEN e.total ELSE 0 END debit, CASE WHEN e.type = 'IADE' THEN 0 ELSE e.total END credit, e.id "refId", e.id ord
            FROM e_invoices e WHERE e.supplier_id = $1 AND e.direction = 'in' AND NOT e.cancelled
          UNION ALL
@@ -156,13 +156,70 @@ export function registerCari(app: FastifyInstance, { db, edmFetcher }: { db: Db;
     return db.query(
       `SELECT e.id, e.uuid, e.direction, e.no, e.date, e.type, e.profile, e.party_tax_id "partyTaxId", e.party_name "partyName", e.currency,
               e.subtotal, e.vat_total "vatTotal", e.total, e.status, e.cancelled, e.customer_id "customerId", e.supplier_id "supplierId",
-              e.invoice_id "invoiceId", i.no "invoiceNo", COALESCE(c.name, s.name) "accountName"
+              e.invoice_id "invoiceId", i.no "invoiceNo", COALESCE(c.name, s.name) "accountName", e.source, e.sale_kind "saleKind", e.note,
+              s.cost_type "costType"
        FROM e_invoices e LEFT JOIN invoices i ON i.id = e.invoice_id LEFT JOIN customers c ON c.id = e.customer_id LEFT JOIN suppliers s ON s.id = e.supplier_id
        WHERE ($1::text IS NULL OR e.direction = $1) AND ($2::date IS NULL OR e.date >= $2) AND ($3::date IS NULL OR e.date <= $3)
          AND ($4::text IS NULL OR e.no ILIKE '%' || $4 || '%' OR e.party_name ILIKE '%' || $4 || '%' OR e.party_tax_id = $4)
        ORDER BY e.date DESC, e.id DESC LIMIT 1000`,
       [q.direction ?? null, q.from ?? null, q.to ?? null, q.q || null],
     );
+  });
+
+  // ---- Elle girilen alış (tedarikçi) / satış (müşteri) kaydı: EDM'de olmayanlar ----
+  const manualSchema = z
+    .object({
+      direction: z.enum(['in', 'out']),
+      date: daySchema,
+      no: optText(40),
+      customerId: z.number().int().positive().nullish(),
+      supplierId: z.number().int().positive().nullish(),
+      type: z.enum(['SATIS', 'IADE']).default('SATIS'),
+      saleKind: z.enum(['kdvli', 'faturali']).nullish(),
+      subtotal: z.number().int().min(0), // kuruş
+      vatTotal: z.number().int().min(0),
+      note: optText(300),
+    })
+    .refine((b) => (b.direction === 'out' ? !!b.customerId : !!b.supplierId), { message: 'Satışta müşteri, alışta tedarikçi seçin' })
+    .refine((b) => b.subtotal + b.vatTotal > 0, { message: 'Tutar girin' });
+
+  async function saveManual(id: number | null, body: unknown) {
+    const b = manualSchema.parse(body);
+    const party = b.direction === 'out'
+      ? (await db.query<{ name: string; tax_id: string | null }>('SELECT name, tax_id FROM customers WHERE id = $1', [b.customerId]))[0]
+      : (await db.query<{ name: string; tax_id: string | null }>('SELECT name, tax_id FROM suppliers WHERE id = $1', [b.supplierId]))[0];
+    if (!party) throw fail(400, b.direction === 'out' ? 'Müşteri bulunamadı' : 'Tedarikçi bulunamadı');
+    const saleKind = b.direction === 'out' ? (b.saleKind ?? 'faturali') : null;
+    const no = b.no || `EL-${b.date.replace(/-/g, '')}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    const vals = [b.direction, no, b.date, b.type, party.tax_id, party.name, b.subtotal, b.vatTotal, b.subtotal + b.vatTotal,
+      b.direction === 'out' ? b.customerId : null, b.direction === 'in' ? b.supplierId : null, saleKind, b.note];
+    if (id) {
+      const [old] = await db.query<{ source: string }>('SELECT source FROM e_invoices WHERE id = $1', [id]);
+      if (!old) throw fail(404, 'Kayıt bulunamadı');
+      if (old.source !== 'manual') throw fail(400, "EDM'den gelen fatura değiştirilemez");
+      await db.query(
+        `UPDATE e_invoices SET direction=$1, no=$2, date=$3, type=$4, party_tax_id=$5, party_name=$6, subtotal=$7, vat_total=$8, total=$9,
+                customer_id=$10, supplier_id=$11, sale_kind=$12, note=$13 WHERE id=$14`,
+        [...vals, id],
+      );
+      return { id };
+    }
+    const [r] = await db.query<{ id: number }>(
+      `INSERT INTO e_invoices(uuid, direction, no, date, type, party_tax_id, party_name, subtotal, vat_total, total, customer_id, supplier_id, sale_kind, note, source)
+       VALUES ($14,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'manual') RETURNING id`,
+      [...vals, `MANUAL-${crypto.randomUUID()}`],
+    );
+    return r;
+  }
+  app.post('/api/e-invoices', async (req) => saveManual(null, req.body));
+  app.put('/api/e-invoices/:id', async (req) => saveManual(idParam(req.params), req.body));
+  app.delete('/api/e-invoices/:id', async (req) => {
+    const id = idParam(req.params);
+    const [old] = await db.query<{ source: string }>('SELECT source FROM e_invoices WHERE id = $1', [id]);
+    if (!old) throw fail(404, 'Kayıt bulunamadı');
+    if (old.source !== 'manual') throw fail(400, "EDM'den gelen fatura silinemez");
+    await db.query('DELETE FROM e_invoices WHERE id = $1', [id]);
+    return { ok: true };
   });
 
   app.get('/api/edm/status', async () => {

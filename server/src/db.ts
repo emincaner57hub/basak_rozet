@@ -401,6 +401,16 @@ const MIGRATIONS: string[] = [
     CHECK ((customer_id IS NULL) <> (supplier_id IS NULL))
   );
   `,
+  // 3 — Tedarikçi türü / telefon / yetkili; elle girilen alış-satış kayıtları ve satış türü
+  `
+  ALTER TABLE suppliers ADD COLUMN cost_type TEXT NOT NULL DEFAULT 'direct' CHECK (cost_type IN ('direct','invoice'));  -- direkt maliyet / fatura amaçlı
+  ALTER TABLE suppliers ADD COLUMN phone TEXT;
+  ALTER TABLE suppliers ADD COLUMN contact_name TEXT;
+  ALTER TABLE e_invoices ADD COLUMN source TEXT NOT NULL DEFAULT 'edm' CHECK (source IN ('edm','manual'));
+  ALTER TABLE e_invoices ADD COLUMN sale_kind TEXT CHECK (sale_kind IN ('kdvli','faturali'));          -- satış: KDV'li / faturalı
+  ALTER TABLE e_invoices ADD COLUMN note TEXT;
+  UPDATE e_invoices SET sale_kind = 'faturali' WHERE direction = 'out';
+  `,
 ];
 
 async function migrate(db: Db, MIGRATIONS: string[]) {

@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { api, PAY_METHOD, SUPPLIER_KIND, type EdmSyncResult, type PayMethod, type StatementRow } from '../api';
+import { api, COST_TYPE_LABEL, PAY_METHOD, SALE_KIND_LABEL, SUPPLIER_KIND, type EInvoice, type EdmSyncResult, type ManualEntryInput, type PayMethod, type StatementRow } from '../api';
 import { Link, useNav } from '../router';
-import { Badge, Confirm, Empty, ErrorLine, Field, Modal, MoneyInput, Page, Tabs, useLoad, useToast } from '../ui';
+import { Badge, Confirm, Empty, ErrorLine, Field, Modal, MoneyInput, Page, SearchSelect, Tabs, useLoad, useToast } from '../ui';
 import { formatTL, monthStart, today, trDate } from '../money';
 
 const syncText = (r: EdmSyncResult) =>
@@ -23,6 +23,7 @@ export function EInvoicesPage() {
   const [syncErr, setSyncErr] = useState('');
   const toast = useToast();
   const st = status.data;
+  const [manual, setManual] = useState<EInvoice | 'new' | null>(null);
   const [diag, setDiag] = useState<Record<string, unknown> | null>(null);
   const [diagBusy, setDiagBusy] = useState(false);
   const live = (data ?? []).filter((e) => !e.cancelled);
@@ -30,8 +31,12 @@ export function EInvoicesPage() {
   return (
     <Page
       title="e-Fatura (EDM)"
-      subtitle="EDM'den gelen ve giden faturalar; karşı taraf vergi numarasıyla cariye yazılır"
+      subtitle="EDM'den gelen ve giden faturalar ile elle girilen alış / satışlar; karşı tarafın carisine yazılır"
       actions={
+        <>
+        <button className="btn" onClick={() => setManual('new')}>
+          + Elle {dir === 'out' ? 'satış' : 'alış'}
+        </button>
         <button
           className="btn btn-primary"
           disabled={busy || !st?.configured}
@@ -52,6 +57,7 @@ export function EInvoicesPage() {
         >
           {busy ? 'EDM okunuyor…' : `⇩ EDM'den çek (${trDate(from)} – ${trDate(to)})`}
         </button>
+        </>
       }
     >
       {st && !st.configured && (
@@ -113,6 +119,7 @@ export function EInvoicesPage() {
               <th>{dir === 'out' ? 'Müşteri' : 'Tedarikçi'}</th>
               <th>VKN / TCKN</th>
               <th>Tür</th>
+              <th>{dir === 'out' ? 'Satış' : 'Maliyet'}</th>
               <th className="text-right">Matrah</th>
               <th className="text-right">KDV</th>
               <th className="text-right">Toplam</th>
@@ -121,7 +128,12 @@ export function EInvoicesPage() {
           </thead>
           <tbody>
             {data?.map((e) => (
-              <tr key={e.id} className={e.cancelled ? 'opacity-50' : ''}>
+              <tr
+                key={e.id}
+                className={`${e.cancelled ? 'opacity-50' : ''} ${e.source === 'manual' ? 'clickable' : ''}`}
+                onClick={e.source === 'manual' ? () => setManual(e) : undefined}
+                title={e.source === 'manual' ? 'Düzeltmek için tıklayın' : undefined}
+              >
                 <td>{trDate(e.date)}</td>
                 <td className="font-mono text-xs">{e.no}</td>
                 <td>
@@ -138,6 +150,11 @@ export function EInvoicesPage() {
                   {e.type === 'IADE' ? <Badge tone="warn">İade</Badge> : <span className="text-sm text-muted">{e.type ?? ''}</span>}
                   {e.currency !== 'TRY' && <span className="ml-1 text-xs text-muted">{e.currency}</span>}
                 </td>
+                <td className="text-sm">
+                  {e.direction === 'out'
+                    ? e.saleKind && <Badge tone={e.saleKind === 'kdvli' ? 'warn' : 'brand'}>{SALE_KIND_LABEL[e.saleKind]}</Badge>
+                    : e.costType && <span className="text-muted">{COST_TYPE_LABEL[e.costType]}</span>}
+                </td>
                 <td className="tabular text-right">{formatTL(e.subtotal)}</td>
                 <td className="tabular text-right">{formatTL(e.vatTotal)}</td>
                 <td className="tabular text-right font-medium">{formatTL(e.total)}</td>
@@ -149,15 +166,30 @@ export function EInvoicesPage() {
                       {e.invoiceNo} ile eşleşti
                     </Link>
                   ) : (
-                    <Badge tone="ok">cariye yazıldı</Badge>
+                    <>
+                      <Badge tone="ok">cariye yazıldı</Badge>
+                      {e.source === 'manual' && <span className="ml-1 text-xs text-muted">elle</span>}
+                    </>
                   )}
+                  {e.note && <div className="text-xs text-muted">{e.note}</div>}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        {data && !data.length && <Empty>Bu aralıkta {dir === 'out' ? 'giden' : 'gelen'} e-fatura yok. EDM'den çekmek için sağ üstteki düğmeyi kullanın.</Empty>}
+        {data && !data.length && <Empty>Bu aralıkta {dir === 'out' ? 'satış' : 'alış'} yok. EDM'den çekmek ya da elle girmek için sağ üstteki düğmeleri kullanın.</Empty>}
       </div>
+      {manual && (
+        <ManualEntryDialog
+          initial={manual === 'new' ? null : manual}
+          direction={manual === 'new' ? dir : manual.direction}
+          onClose={() => setManual(null)}
+          onSaved={() => {
+            setManual(null);
+            reload();
+          }}
+        />
+      )}
     </Page>
   );
 }
@@ -188,7 +220,9 @@ export function SuppliersCariPage() {
             {data?.map((s) => (
               <tr key={s.id} className="clickable" onClick={() => go(`/tedarikciler/${s.id}`)}>
                 <td className="font-medium">{s.name}</td>
-                <td className="text-sm text-muted">{SUPPLIER_KIND[s.kind]}</td>
+                <td className="text-sm text-muted">
+                  {SUPPLIER_KIND[s.kind]} · {COST_TYPE_LABEL[s.costType]}
+                </td>
                 <td className="text-sm text-muted">{s.taxId ?? '—'}</td>
                 <td className="tabular text-right">{s.invoiceCount || ''}</td>
                 <td className={`tabular text-right font-medium ${s.balance > 0 ? 'text-bad' : ''}`}>{formatTL(s.balance)}</td>
@@ -474,6 +508,149 @@ function SupplierPaymentDialog({ supplierId, onClose, onSaved }: { supplierId: n
       <Field label="Not">
         <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
       </Field>
+    </Modal>
+  );
+}
+
+/** Elle alış (tedarikçi) / satış (müşteri) kaydı: EDM'de olmayanlar. Tutarlar kuruş. */
+function ManualEntryDialog({ initial, direction, onClose, onSaved }: { initial: EInvoice | null; direction: 'in' | 'out'; onClose: () => void; onSaved: () => void }) {
+  const out = direction === 'out';
+  const customers = useLoad(() => (out ? api.customers() : Promise.resolve([])), [out]);
+  const suppliers = useLoad(() => (out ? Promise.resolve([]) : api.suppliers()), [out]);
+  const [date, setDate] = useState(initial?.date ?? today());
+  const [no, setNo] = useState(initial?.no ?? '');
+  const [partyId, setPartyId] = useState<number | null>((out ? initial?.customerId : initial?.supplierId) ?? null);
+  const [type, setType] = useState<'SATIS' | 'IADE'>(initial?.type === 'IADE' ? 'IADE' : 'SATIS');
+  const [saleKind, setSaleKind] = useState<'kdvli' | 'faturali'>(initial?.saleKind ?? 'faturali');
+  const [subtotal, setSubtotal] = useState<number | null>(initial?.subtotal ?? null);
+  const [rate, setRate] = useState(20);
+  const [vat, setVat] = useState<number | null>(initial?.vatTotal ?? null);
+  const [note, setNote] = useState(initial?.note ?? '');
+  const [err, setErr] = useState('');
+  const [del, setDel] = useState(false);
+  const toast = useToast();
+  const setNet = (v: number | null) => {
+    setSubtotal(v);
+    setVat(v == null ? null : Math.round((v * rate) / 100));
+  };
+  return (
+    <Modal
+      title={`${initial ? 'Elle kayıt' : 'Yeni elle kayıt'} · ${out ? 'satış (müşteri)' : 'alış (tedarikçi)'}`}
+      onClose={onClose}
+      width={560}
+      footer={
+        <>
+          {err && <span className="mr-auto text-sm text-bad">{err}</span>}
+          {initial && (
+            <button className="btn mr-auto" onClick={() => setDel(true)}>
+              Sil
+            </button>
+          )}
+          <button className="btn" onClick={onClose}>
+            Vazgeç
+          </button>
+          <button
+            className="btn btn-primary"
+            disabled={!partyId || subtotal == null}
+            onClick={async () => {
+              const b: ManualEntryInput = {
+                direction,
+                date,
+                no: no || null,
+                customerId: out ? partyId : null,
+                supplierId: out ? null : partyId,
+                type,
+                saleKind: out ? saleKind : null,
+                subtotal: subtotal ?? 0,
+                vatTotal: vat ?? 0,
+                note: note || null,
+              };
+              try {
+                await api.saveManualEntry(initial?.id ?? null, b);
+                toast('Kaydedildi, cariye yazıldı');
+                onSaved();
+              } catch (e) {
+                setErr((e as Error).message);
+              }
+            }}
+          >
+            Kaydet
+          </button>
+        </>
+      }
+    >
+      <div className="grid grid-cols-2 gap-3">
+        <Field label={out ? 'Müşteri' : 'Tedarikçi'}>
+          {out ? (
+            <SearchSelect items={customers.data ?? []} value={partyId} onChange={setPartyId} label={(c) => c.name} />
+          ) : (
+            <SearchSelect items={suppliers.data ?? []} value={partyId} onChange={setPartyId} label={(s) => s.name} sub={(s) => COST_TYPE_LABEL[s.costType]} />
+          )}
+        </Field>
+        <Field label="Tarih">
+          <input type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)} />
+        </Field>
+        {out && (
+          <Field label="Satış türü">
+            <select className="input" value={saleKind} onChange={(e) => setSaleKind(e.target.value as 'kdvli' | 'faturali')}>
+              <option value="faturali">{SALE_KIND_LABEL.faturali}</option>
+              <option value="kdvli">{SALE_KIND_LABEL.kdvli}</option>
+            </select>
+          </Field>
+        )}
+        <Field label="Belge türü">
+          <select className="input" value={type} onChange={(e) => setType(e.target.value as 'SATIS' | 'IADE')}>
+            <option value="SATIS">{out ? 'Satış' : 'Alış'}</option>
+            <option value="IADE">İade</option>
+          </select>
+        </Field>
+        <Field label="Belge no (boş: otomatik)">
+          <input className="input" value={no} onChange={(e) => setNo(e.target.value)} />
+        </Field>
+        <Field label="Matrah (KDV hariç)">
+          <MoneyInput value={subtotal} onChange={setNet} placeholder="ör. 10.000,00" />
+        </Field>
+        <Field label="KDV oranı">
+          <select
+            className="input"
+            value={rate}
+            onChange={(e) => {
+              const r = Number(e.target.value);
+              setRate(r);
+              if (subtotal != null) setVat(Math.round((subtotal * r) / 100));
+            }}
+          >
+            {[0, 1, 10, 20].map((r) => (
+              <option key={r} value={r}>
+                %{r}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="KDV tutarı">
+          <MoneyInput value={vat} onChange={setVat} />
+        </Field>
+      </div>
+      <div className="mt-2 text-sm text-muted">
+        Toplam: <b className="text-ink">{formatTL((subtotal ?? 0) + (vat ?? 0))}</b>
+      </div>
+      <Field label="Not">
+        <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
+      </Field>
+      {del && initial && (
+        <Confirm
+          title="Kayıt silinsin mi?"
+          text={`${initial.no} cariden de çıkar.`}
+          yes="Sil"
+          danger
+          onClose={() => setDel(false)}
+          onYes={async () => {
+            await api.deleteManualEntry(initial.id);
+            toast('Silindi');
+            onSaved();
+          }}
+        />
+      )}
     </Modal>
   );
 }

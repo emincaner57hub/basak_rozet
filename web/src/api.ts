@@ -71,6 +71,9 @@ export interface Supplier {
   name: string;
   kind: 'china' | 'temu' | 'broker' | 'local' | 'other';
   contact: string | null;
+  costType: 'direct' | 'invoice';
+  phone: string | null;
+  contactName: string | null;
   note: string | null;
   active: boolean;
   lotCount: number;
@@ -314,6 +317,7 @@ export interface SupplierBalance {
   id: number;
   name: string;
   kind: Supplier['kind'];
+  costType: Supplier['costType'];
   taxId: string | null;
   balance: number;
   invoiceCount: number;
@@ -339,6 +343,22 @@ export interface EInvoice {
   invoiceId: number | null;
   invoiceNo: string | null;
   accountName: string | null;
+  source: 'edm' | 'manual';
+  saleKind: 'kdvli' | 'faturali' | null;
+  note: string | null;
+  costType: Supplier['costType'] | null;
+}
+export interface ManualEntryInput {
+  direction: 'in' | 'out';
+  date: string;
+  no?: string | null;
+  customerId?: number | null;
+  supplierId?: number | null;
+  type: 'SATIS' | 'IADE';
+  saleKind?: 'kdvli' | 'faturali' | null;
+  subtotal: number;
+  vatTotal: number;
+  note?: string | null;
 }
 export interface EdmSyncResult {
   in: number;
@@ -515,6 +535,8 @@ export const api = {
   deleteAdjustment: (id: number) => req('DELETE', `/api/adjustments/${id}`),
   eInvoices: (o: { direction?: 'in' | 'out'; from?: string; to?: string; q?: string } = {}) => req<EInvoice[]>('GET', `/api/e-invoices${qs(o)}`),
   edmStatus: () => req<EdmStatus>('GET', '/api/edm/status'),
+  saveManualEntry: (id: number | null, b: ManualEntryInput) => req<{ id: number }>(id ? 'PUT' : 'POST', id ? `/api/e-invoices/${id}` : '/api/e-invoices', b),
+  deleteManualEntry: (id: number) => req('DELETE', `/api/e-invoices/${id}`),
   edmDiag: () => req<Record<string, unknown>>('GET', '/api/edm/diag'),
   edmSync: (from: string, to: string) => req<EdmSyncResult>('POST', '/api/edm/sync', { from, to }),
   saveSupplier: (id: number | null, b: Omit<Supplier, 'id' | 'lotCount'>) => req<{ id: number }>(id ? 'PUT' : 'POST', id ? `/api/suppliers/${id}` : '/api/suppliers', b),
@@ -586,5 +608,7 @@ export const COST_LABEL: Record<CostType, string> = {
   other: 'Diğer',
 };
 export const SUPPLIER_KIND: Record<Supplier['kind'], string> = { china: 'Çin tedarikçi', temu: 'Temu / online', broker: 'Gümrük müşaviri', local: 'Yerel', other: 'Diğer' };
+export const COST_TYPE_LABEL: Record<Supplier['costType'], string> = { direct: 'Direkt maliyet', invoice: 'Fatura amaçlı' };
+export const SALE_KIND_LABEL: Record<'kdvli' | 'faturali', string> = { kdvli: "KDV'li", faturali: 'Faturalı' };
 export const LOT_KIND: Record<LotDetail['kind'], string> = { import: 'Çin ithalatı', temu: 'Temu / bavul', local: 'Yerel alım' };
 export type Tone = 'brand' | 'ok' | 'warn' | 'bad' | 'muted';

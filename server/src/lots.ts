@@ -12,6 +12,9 @@ const supplierSchema = z.object({
   name: z.string().trim().min(1, 'Ad girin').max(120),
   kind: z.enum(['china', 'temu', 'broker', 'local', 'other']).default('china'),
   contact: optText(200),
+  costType: z.enum(['direct', 'invoice']).default('direct'), // direkt maliyet / fatura amaçlı
+  phone: optText(40),
+  contactName: optText(100),
   note: optText(500),
   active: z.boolean().default(true),
 });
@@ -74,21 +77,20 @@ async function lotDetail(q: Queryable, id: number) {
 export function registerLots(app: FastifyInstance, { db }: { db: Db }) {
   // ---- Tedarikçiler ----
   app.get('/api/suppliers', async () =>
-    db.query(`SELECT id, name, kind, contact, note, active, (SELECT COUNT(*) FROM lots t WHERE t.supplier_id = s.id) "lotCount" FROM suppliers s ORDER BY active DESC, name`),
+    db.query(`SELECT id, name, kind, contact, cost_type "costType", phone, contact_name "contactName", note, active, (SELECT COUNT(*) FROM lots t WHERE t.supplier_id = s.id) "lotCount" FROM suppliers s ORDER BY active DESC, name`),
   );
   async function saveSupplier(id: number | null, body: unknown) {
     const b = supplierSchema.parse(body);
     if (id) {
-      await db.query('UPDATE suppliers SET name=$1, kind=$2, contact=$3, note=$4, active=$5 WHERE id=$6', [b.name, b.kind, b.contact, b.note, b.active, id]);
+      await db.query('UPDATE suppliers SET name=$1, kind=$2, contact=$3, note=$4, active=$5, cost_type=$6, phone=$7, contact_name=$8 WHERE id=$9', [
+        b.name, b.kind, b.contact, b.note, b.active, b.costType, b.phone, b.contactName, id,
+      ]);
       return { id };
     }
-    const [r] = await db.query<{ id: number }>('INSERT INTO suppliers(name, kind, contact, note, active) VALUES ($1,$2,$3,$4,$5) RETURNING id', [
-      b.name,
-      b.kind,
-      b.contact,
-      b.note,
-      b.active,
-    ]);
+    const [r] = await db.query<{ id: number }>(
+      'INSERT INTO suppliers(name, kind, contact, note, active, cost_type, phone, contact_name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',
+      [b.name, b.kind, b.contact, b.note, b.active, b.costType, b.phone, b.contactName],
+    );
     return r;
   }
   app.post('/api/suppliers', async (req) => saveSupplier(null, req.body));

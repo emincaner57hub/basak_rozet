@@ -419,10 +419,10 @@ export async function saveInvoices(db: Db, list: EdmInvoice[]): Promise<SyncResu
       }
       await q.query(
         `INSERT INTO e_invoices(uuid, direction, no, date, type, profile, party_tax_id, party_name, currency, fx_rate, subtotal, vat_total, total, status,
-                                customer_id, supplier_id, invoice_id, cancelled)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+                                customer_id, supplier_id, invoice_id, cancelled, source, sale_kind)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'edm',$19)`,
         [uuid, e.direction, no, p.date, p.type || null, p.profile || null, other.taxId || null, other.name || null, p.currency, p.fxRate, p.subtotal, p.vat, p.total, e.status || null,
-          customerId, e.direction === 'in' ? partyId : null, invoiceId, cancelled],
+          customerId, e.direction === 'in' ? partyId : null, invoiceId, cancelled, e.direction === 'out' ? 'faturali' : null],
       );
       const after = await q.query<{ c: number; s: number }>('SELECT (SELECT COUNT(*) FROM customers) c, (SELECT COUNT(*) FROM suppliers) s');
       res.newCustomers += after[0].c - before[0].c;
