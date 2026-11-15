@@ -176,6 +176,23 @@ export function registerCari(app: FastifyInstance, { db, edmFetcher }: { db: Db;
   });
 
   let running = false;
+  app.get('/api/edm/diag', async () => {
+    const cfg = edmConfig();
+    if (!cfg) return { configured: false };
+    const { EdmClient } = await import('./edm.js');
+    const c = new EdmClient(cfg, edmFetcher);
+    const d: Record<string, unknown> = { configured: true, url: cfg.url, userLength: cfg.user.length, passwordLength: cfg.password.length, ...(await c.diag()) };
+    try {
+      await c.login();
+      d.login = 'ok';
+      await c.logout();
+    } catch (e) {
+      d.login = (e as Error).message;
+    }
+    d.qualifyUsed = (await c.diag()).qualifyUsed;
+    return d;
+  });
+
   app.post('/api/edm/sync', async (req) => {
     const b = z.object({ from: daySchema, to: daySchema }).parse(req.body ?? {});
     if (b.from > b.to) throw fail(400, 'Başlangıç bitişten sonra olamaz');

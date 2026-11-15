@@ -42,7 +42,9 @@ const render = (nodes: Node[]): string => nodes.map(([k, v]) => `<${k}>${typeof 
 
 export class EdmClient {
   private session: string | null = null;
-  private wsdl: { actions: Map<string, string>; orders: string[][] } | null = null;
+  private wsdl: { actions: Map<string, string>; orders: string[][]; inputs: Map<string, string>; qualified: boolean | null; ok: boolean } | null = null;
+  /** Gövde öğelerinin ad alanı: WSDL'de yazmıyorsa önce nitelemesiz denenir, sunucu boş okursa nitelikli */
+  private qualify: boolean | null = null;
 
   constructor(
     private cfg: EdmConfig,
@@ -54,6 +56,9 @@ export class EdmClient {
     if (this.wsdl) return this.wsdl;
     const actions = new Map<string, string>();
     const orders: string[][] = [];
+    const inputs = new Map<string, string>();
+    let qualified: boolean | null = null;
+    let ok = false;
     try {
       const r = await this.fetcher(`${this.cfg.url}?singleWsdl`);
       const t = await r.text();
@@ -62,10 +67,25 @@ export class EdmClient {
         const names = [...m[1].matchAll(/<xs:element[^>]*\bname="(\w+)"/g)].map((x) => x[1]);
         if (names.length) orders.push(names);
       }
+      // Ad alanı kuralı: hedef ad alanı NS olan şemada elementFormDefault
+      for (const m of t.matchAll(/<xs:schema\b([^>]*)>/g)) {
+        if (!m[1].includes(NS)) continue;
+        const f = m[1].match(/elementFormDefault="(\w+)"/)?.[1];
+        if (f) qualified = f === 'qualified';
+      }
+      // İşlemin giriş öğesi (ör. Login → LoginRequest): portType işlemi → mesaj → part element
+      const msgEl = new Map<string, string>();
+      for (const m of t.matchAll(/<wsdl:message name="(\w+)">\s*<wsdl:part[^>]*\belement="(?:\w+:)?(\w+)"/g)) msgEl.set(m[1], m[2]);
+      for (const m of t.matchAll(/<wsdl:operation name="(\w+)"[^>]*>(?:(?!<\/wsdl:operation>)[\s\S])*?<wsdl:input[^>]*\bmessage="(?:\w+:)?(\w+)"/g)) {
+        const el = msgEl.get(m[2]);
+        if (el) inputs.set(m[1], el);
+      }
+      ok = actions.size > 0;
     } catch {
       /* WSDL alınamazsa varsayılanlar */
     }
-    this.wsdl = { actions, orders };
+    this.wsdl = { actions, orders, inputs, qualified, ok };
+    if (this.qualify == null && qualified != null) this.qualify = qualified;
     return this.wsdl;
   }
 
@@ -92,11 +112,47 @@ export class EdmClient {
     ];
   }
 
-  async call(op: string, body: Node[]): Promise<Record<string, unknown>> {
+  /** Tanı: WSDL'den ne okunduğu (şifre yok) */
+  async diag() {
     const w = await this.loadWsdl();
-    const envelope =
-      `<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>` +
-      `<ns:${op}Request xmlns:ns="${NS}">${render(this.ordered([this.header(), ...body]))}</ns:${op}Request></s:Body></s:Envelope>`;
+    return {
+      wsdlRead: w.ok,
+      operations: w.actions.size,
+      loginAction: w.actions.get('Login') ?? null,
+      loginElement: w.inputs.get('Login') ?? null,
+      elementFormDefault: w.qualified == null ? null : w.qualified ? 'qualified' : 'unqualified',
+      loginOrder: w.orders.find((o) => o.includes('USER_NAME') && o.includes('PASSWORD')) ?? null,
+      headerOrder: w.orders.find((o) => o.includes('SESSION_ID') && o.includes('CLIENT_TXN_ID')) ?? null,
+      qualifyUsed: this.qualify,
+    };
+  }
+
+  envelope(op: string, body: Node[], qualify: boolean): string {
+    const root = this.wsdl?.inputs.get(op) ?? `${op}Request`;
+    const inner = render(this.ordered([this.header(), ...body]));
+    const el = qualify ? `<${root} xmlns="${NS}">${inner}</${root}>` : `<ns:${root} xmlns:ns="${NS}">${inner}</ns:${root}>`;
+    return `<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>${el}</s:Body></s:Envelope>`;
+  }
+
+  async call(op: string, body: Node[]): Promise<Record<string, unknown>> {
+    await this.loadWsdl();
+    // Biçim belli değilse: önce nitelemesiz; sunucu alanları boş okuyup "Object reference" verirse nitelikli dene
+    if (this.qualify != null) return this.send(op, body, this.qualify);
+    try {
+      const r = await this.send(op, body, false);
+      this.qualify = false;
+      return r;
+    } catch (e) {
+      if (!(e instanceof EdmError) || !/Object reference|null/i.test(e.message)) throw e;
+      const r = await this.send(op, body, true);
+      this.qualify = true;
+      return r;
+    }
+  }
+
+  private async send(op: string, body: Node[], qualify: boolean): Promise<Record<string, unknown>> {
+    const w = this.wsdl!;
+    const envelope = this.envelope(op, body, qualify);
     const action = w.actions.get(op) ?? w.actions.get(`${op}Request`) ?? op;
     let r;
     try {

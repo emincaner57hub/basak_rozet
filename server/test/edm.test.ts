@@ -158,3 +158,43 @@ describe('EDM e-fatura ve cari', () => {
     expect(r.json().error).toContain('şifre hatalı');
   });
 });
+
+describe('EDM istek biçimi', () => {
+  const NSX = 'http://schemas.i2i.com/ei/wsdl';
+  const nullRef = { status: 500, text: async () => `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><faultcode>s:Server</faultcode><faultstring>Object reference not set to an instance of an object.</faultstring></s:Fault></s:Body></s:Envelope>` };
+  const ok = { status: 200, text: async () => `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><LoginResponse xmlns="${NSX}"><SESSION_ID>s-1</SESSION_ID></LoginResponse></s:Body></s:Envelope>` };
+
+  it('sunucu alanları boş okursa ad alanlı biçimle yeniden dener', async () => {
+    const { EdmClient } = await import('../src/edm.js');
+    const bodies: string[] = [];
+    const f: Fetcher = async (url, init) => {
+      if (url.endsWith('?singleWsdl')) return { status: 404, text: async () => '' };
+      bodies.push(init!.body!);
+      return init!.body!.includes(`<LoginRequest xmlns="${NSX}">`) ? ok : nullRef;
+    };
+    const c = new EdmClient({ url: 'https://x/e.svc', user: 'u', password: 'p' }, f);
+    await c.login();
+    expect(bodies).toHaveLength(2);
+    expect((await c.diag()).qualifyUsed).toBe(true);
+  });
+
+  it('WSDL nitelikli diyorsa ve giriş öğesi adı farklıysa ona uyar', async () => {
+    const { EdmClient } = await import('../src/edm.js');
+    const wsdl = `<wsdl:definitions><wsdl:types><xs:schema elementFormDefault="qualified" targetNamespace="${NSX}"><xs:element name="LoginRequest"><xs:complexType><xs:sequence><xs:element name="REQUEST_HEADER"/><xs:element name="USER_NAME"/><xs:element name="PASSWORD"/></xs:sequence></xs:complexType></xs:element></xs:schema></wsdl:types>
+      <wsdl:message name="LoginMsg"><wsdl:part name="p" element="tns:LoginRequest"/></wsdl:message>
+      <wsdl:portType name="P"><wsdl:operation name="Login"><wsdl:input message="tns:LoginMsg"/></wsdl:operation></wsdl:portType>
+      <wsdl:binding><wsdl:operation name="Login"><soap:operation soapAction="urn:Login" style="document"/></wsdl:operation></wsdl:binding></wsdl:definitions>`;
+    const bodies: string[] = [];
+    const f: Fetcher = async (url, init) => {
+      if (url.endsWith('?singleWsdl')) return { status: 200, text: async () => wsdl };
+      bodies.push(init!.body!);
+      expect(init!.headers!.SOAPAction).toBe('"urn:Login"');
+      return ok;
+    };
+    const c = new EdmClient({ url: 'https://x/e.svc', user: 'u', password: 'p' }, f);
+    await c.login();
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toContain(`<LoginRequest xmlns="${NSX}"><REQUEST_HEADER>`);
+    expect(await c.diag()).toMatchObject({ elementFormDefault: 'qualified', loginElement: 'LoginRequest', loginAction: 'urn:Login' });
+  });
+});
