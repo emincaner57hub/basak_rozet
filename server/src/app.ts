@@ -14,6 +14,7 @@ import { registerInvoices } from './invoices.js';
 import { registerReports } from './reports.js';
 import { registerSettings } from './settings.js';
 import { registerCari } from './cari.js';
+import { registerPortal } from './portal.js';
 import type { Fetcher } from './edm.js';
 
 export const VERSION = (process.env.RENDER_GIT_COMMIT ?? '').slice(0, 7) || 'yerel';
@@ -57,6 +58,7 @@ export function buildApp({ db, now = () => new Date(), webDist, sessionSecret, s
     registerReports(app, { db, now });
     registerSettings(app, { db });
     registerCari(app, { db, edmFetcher });
+    registerPortal(app, { db, secret: sessionSecret, now, secureCookies });
   });
 
   // Web arayüzü (derlenmiş). index.html önbelleğe alınmaz: yeni sürüm hemen gelsin.

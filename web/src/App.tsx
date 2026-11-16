@@ -14,6 +14,7 @@ import { ReportsPage } from './pages/Reports';
 import { SettingsPage } from './pages/Settings';
 import { PrintDispatch, PrintInvoice } from './pages/Print';
 import { EInvoicesPage, SuppliersCariPage, SupplierCariPage } from './pages/Cari';
+import PortalApp from './pages/Portal';
 
 const NAV: { to: string; label: string; icon: string; group?: string }[] = [
   { to: '/', label: 'Panel', icon: '◧' },
@@ -66,13 +67,49 @@ function Routes() {
 let currentUser: User | null = null;
 export const getUser = () => currentUser;
 
+/** Müşteriden gelen, henüz açılmamış siparişler (menü rozeti); dakikada bir */
+function useIncoming() {
+  const [n, setN] = useState(0);
+  const { path } = useNav();
+  useEffect(() => {
+    let alive = true;
+    const f = () => api.incomingOrders().then((r) => alive && setN(r.count), () => {});
+    f();
+    const t = setInterval(f, 60_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [path]);
+  return n;
+}
+
 function Shell({ children }: { children: ReactNode }) {
   const { path } = useNav();
   const active = (to: string) => (to === '/' ? path.split('?')[0] === '/' : path.startsWith(to));
+  const incoming = useIncoming();
+  const [menu, setMenu] = useState(false);
+  useEffect(() => setMenu(false), [path]);
   let lastGroup: string | undefined;
   return (
-    <div className="flex min-h-full">
-      <aside className="no-print sticky top-0 flex h-screen w-56 shrink-0 flex-col border-r border-line bg-card">
+    <div className="flex min-h-full flex-col md:flex-row">
+      {/* Telefon: üst çubuk + açılır menü */}
+      <div className="no-print sticky top-0 z-30 flex items-center gap-2 border-b border-line bg-card px-3 py-2 md:hidden">
+        <button className="rounded-lg px-2 py-1 text-xl" onClick={() => setMenu(!menu)} aria-label="Menü">
+          ☰
+        </button>
+        <img src="/favicon.svg" alt="" className="h-6 w-6" />
+        <div className="flex-1 font-semibold">Başak Rozet</div>
+        {incoming > 0 && (
+          <Link to="/siparisler?durum=gelen" className="rounded-full bg-warn px-2.5 py-0.5 text-xs font-semibold text-white">
+            {incoming} yeni sipariş
+          </Link>
+        )}
+      </div>
+      {menu && <div className="fixed inset-0 z-30 bg-black/30 md:hidden" onClick={() => setMenu(false)} />}
+      <aside
+        className={`no-print fixed inset-y-0 left-0 z-40 flex h-screen w-64 shrink-0 flex-col border-r border-line bg-card transition-transform md:sticky md:top-0 md:w-56 md:translate-x-0 ${menu ? 'translate-x-0' : '-translate-x-full'}`}
+      >
         <div className="flex items-center gap-2 px-4 py-4">
           <img src="/favicon.svg" alt="" className="h-7 w-7" />
           <div>
@@ -92,7 +129,12 @@ function Shell({ children }: { children: ReactNode }) {
                   className={`mb-0.5 flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm ${active(n.to) ? 'bg-brand-soft font-semibold text-brand' : 'text-ink/80 hover:bg-paper'}`}
                 >
                   <span className="w-4 text-center opacity-70">{n.icon}</span>
-                  {n.label}
+                  <span className="flex-1">{n.label}</span>
+                  {n.to === '/siparisler' && incoming > 0 && (
+                    <span className="rounded-full bg-warn px-1.5 text-[11px] font-semibold text-white" title="Müşteriden gelen, açılmamış">
+                      {incoming}
+                    </span>
+                  )}
                 </Link>
               </div>
             );
@@ -156,6 +198,11 @@ function Login({ onDone }: { onDone: (u: User) => void }) {
 }
 
 export default function App() {
+  // Müşteri portalı: ekip oturumundan bağımsız
+  return location.pathname.startsWith('/portal') ? <PortalApp /> : <StaffApp />;
+}
+
+function StaffApp() {
   const [state, setState] = useState<'loading' | 'login' | 'ok'>('loading');
   useEffect(() => {
     api.session().then(

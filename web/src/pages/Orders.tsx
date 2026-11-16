@@ -38,7 +38,15 @@ export function OrdersTable({ rows, showCustomer = true }: { rows: OrderSummary[
                   {o.customerName}
                 </td>
               )}
-              <td className="text-xs">{CHANNEL_LABEL[o.channel]}</td>
+              <td className="text-xs">
+                {CHANNEL_LABEL[o.channel]}
+                {o.portalUser && <div className="text-muted">{o.portalUser}</div>}
+                {o.isNew && (
+                  <span className="ml-0 mt-0.5 inline-block">
+                    <Badge tone="warn">yeni</Badge>
+                  </span>
+                )}
+              </td>
               <td className="tabular text-right">{fmtNum(o.qty)}</td>
               <td className="tabular text-right">{fmtNum(o.shipped)}</td>
               <td className="tabular text-right">{formatTL(o.total)}</td>
@@ -55,19 +63,28 @@ export function OrdersTable({ rows, showCustomer = true }: { rows: OrderSummary[
 }
 
 export function OrdersPage() {
-  const [status, setStatus] = useState<'open' | 'all'>('open');
+  const { path } = useNav();
+  const [status, setStatus] = useState<'open' | 'all' | 'portal'>(queryParam(path, 'durum') === 'gelen' ? 'portal' : 'open');
   const [q, setQ] = useState('');
   const [qd, setQd] = useState('');
   useEffect(() => {
     const t = setTimeout(() => setQd(q), 250);
     return () => clearTimeout(t);
   }, [q]);
+  useEffect(() => {
+    if (queryParam(path, 'durum') === 'gelen') setStatus('portal');
+  }, [path]);
   const { data, error } = useLoad(() => api.orders({ status, q: qd }), [status, qd]);
   const { go } = useNav();
+  const newCount = data?.filter((o) => o.isNew).length ?? 0;
   return (
     <Page
       title="Siparişler"
-      subtitle="Panelden, telefon / WhatsApp ile girilen ya da Excel'den yüklenen siparişler"
+      subtitle={
+        status === 'portal'
+          ? `Müşterilerin satın almacılarının cepten verdiği siparişler${newCount ? ` · ${newCount} yeni (açılmamış)` : ''}`
+          : "Panelden, telefon / WhatsApp ile girilen, Excel'den yüklenen ya da müşterinin cepten verdiği siparişler"
+      }
       actions={
         <>
           <button className="btn" onClick={() => go('/siparisler/excel')}>
@@ -80,11 +97,12 @@ export function OrdersPage() {
       }
     >
       <ErrorLine error={error} />
-      <div className="mb-3 flex items-center gap-2">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="flex rounded-lg border border-line bg-card p-0.5">
           {(
             [
               ['open', 'Bekleyenler'],
+              ['portal', 'Gelen (müşteriden)'],
               ['all', 'Tümü'],
             ] as const
           ).map(([v, l]) => (
@@ -95,7 +113,7 @@ export function OrdersPage() {
         </div>
         <input className="input max-w-xs" placeholder="Sipariş no, müşteri, zincir, referans…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-      <div className="card overflow-hidden">{data && <OrdersTable rows={data} />}</div>
+      <div className="card overflow-x-auto">{data && <OrdersTable rows={data} />}</div>
     </Page>
   );
 }
@@ -347,6 +365,18 @@ export function OrderPage({ id }: { id: number }) {
       subtitle={
         <>
           <Link to={`/musteriler/${o.customerId}`}>{o.chainName ? `${o.chainName} · ${o.customerName}` : o.customerName}</Link> · {trDate(o.date)} · {CHANNEL_LABEL[o.channel]}
+          {o.portalUser && (
+            <>
+              {' '}
+              · satın almacı <b>{o.portalUser}</b>
+              {o.portalPhone && (
+                <>
+                  {' '}
+                  (<a href={`tel:${o.portalPhone}`}>{o.portalPhone}</a>)
+                </>
+              )}
+            </>
+          )}
           {o.requestedDate && ` · istenen teslim ${trDate(o.requestedDate)}`}
           {o.customerRef && ` · ref ${o.customerRef}`}
         </>

@@ -40,6 +40,52 @@ describe('Başak Rozet akışı', () => {
     return { chain, moda, izmir, solo, a, b, logo, stand };
   }
 
+  it('müşteri portalı: satın almacı kodu, atanan şubeler, sipariş ve gelen siparişler', async () => {
+    const s = await setup();
+    await req('PUT', `/api/customers/${s.chain.id}/prices/${s.a.id}`, { price: 5500 });
+    // zincire atanan satın almacı → tüm şubeleri; tek kafe ayrıca
+    const pu = await req('POST', '/api/portal-users', { code: 'Ayse.KD', name: 'Ayşe', password: 'portal123', customerIds: [s.chain.id] });
+    await expect(req('POST', '/api/portal-users', { code: 'ayse.kd', name: 'X', password: 'portal123' })).rejects.toMatchObject({ status: 409 });
+    const anon = await app.inject({ method: 'GET', url: '/api/portal/orders' });
+    expect(anon.statusCode).toBe(401);
+    expect((await app.inject({ method: 'POST', url: '/api/portal/login', payload: { code: 'ayse.kd', password: 'yanlis' } })).statusCode).toBe(401);
+    const lr = await app.inject({ method: 'POST', url: '/api/portal/login', payload: { code: 'AYSE.KD', password: 'portal123' } });
+    expect(lr.statusCode).toBe(200);
+    const pc = lr.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+    const preq = async (method: 'GET' | 'POST', url: string, payload?: object) => {
+      const r = await app.inject({ method, url, payload, headers: { cookie: pc } });
+      return { status: r.statusCode, body: r.json() as any };
+    };
+    // portal çerezi ekip API'sini açmaz
+    expect((await app.inject({ method: 'GET', url: '/api/customers', headers: { cookie: pc } })).statusCode).toBe(401);
+    const ses = (await preq('GET', '/api/portal/session')).body;
+    expect(ses.user.name).toBe('Ayşe');
+    expect(ses.customers.map((c: any) => c.name).sort()).toEqual(['Moda', 'İzmir'].sort());
+    const cat = (await preq('GET', `/api/portal/catalog?customerId=${s.moda.id}`)).body;
+    expect(cat.find((p: any) => p.code === 'R-1').price).toBe(5500);
+    expect(cat.find((p: any) => p.code === 'STAND')).toBeUndefined(); // promosyon portalda yok
+    expect(cat[0].onHand).toBeUndefined(); // stok gösterilmez
+    expect((await preq('GET', `/api/portal/catalog?customerId=${s.solo.id}`)).status).toBe(403);
+    const o = await preq('POST', '/api/portal/orders', { customerId: s.moda.id, requestedDate: '2026-10-25', note: 'acil', lines: [{ productId: s.a.id, qty: 10 }, { productId: s.logo.id, qty: 2 }] });
+    expect(o.status).toBe(200);
+    expect((await preq('POST', '/api/portal/orders', { customerId: s.solo.id, lines: [{ productId: s.a.id, qty: 1 }] })).status).toBe(403);
+    const mine = (await preq('GET', '/api/portal/orders')).body;
+    expect(mine[0]).toMatchObject({ no: o.body.no, customerName: 'Moda', status: 'open', total: 10 * 5500 + 2 * 7000, byName: 'Ayşe' });
+    // Ekip: gelen siparişler
+    expect((await req('GET', '/api/orders/incoming')).count).toBe(1);
+    const inc = await req('GET', '/api/orders?status=portal');
+    expect(inc).toHaveLength(1);
+    expect(inc[0]).toMatchObject({ channel: 'portal', portalUser: 'Ayşe', isNew: true });
+    const d = await req('GET', `/api/orders/${o.body.id}`);
+    expect(d.portalUser).toBe('Ayşe');
+    expect((await req('GET', '/api/orders/incoming')).count).toBe(0); // açıldı → görüldü
+    // kullanıcı pasif → giriş yok
+    await req('PUT', `/api/portal-users/${pu.id}`, { code: 'ayse.kd', name: 'Ayşe', active: false, customerIds: [s.chain.id] });
+    expect((await preq('GET', '/api/portal/orders')).status).toBe(401);
+    // siparişi olan kullanıcı silinmez, pasifleşir
+    expect((await req('DELETE', `/api/portal-users/${pu.id}`)).deactivated).toBe(true);
+  });
+
   it('giriş olmadan API kapalı', async () => {
     const r = await app.inject({ method: 'GET', url: '/api/customers' });
     expect(r.statusCode).toBe(401);

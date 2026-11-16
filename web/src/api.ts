@@ -147,6 +147,27 @@ export interface OrderSummary {
   shipped: number;
   total: number;
   status: OrderStatus;
+  portalUser: string | null;
+  isNew: boolean;
+}
+export interface PortalUser {
+  id: number;
+  code: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  active: boolean;
+  lastLogin: string | null;
+  customers: { id: number; name: string; kind: CustomerKind }[];
+}
+export interface PortalUserInput {
+  code: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  active: boolean;
+  password?: string | null;
+  customerIds: number[];
 }
 export interface OrderDetail {
   id: number;
@@ -163,6 +184,8 @@ export interface OrderDetail {
   note: string | null;
   status: OrderStatus;
   total: number;
+  portalUser: string | null;
+  portalPhone: string | null;
   lines: { id: number; productId: number; code: string; name: string; kind: 'sale' | 'promo'; vatRate: number; qty: number; unitPrice: number; shipped: number; remaining: number; onHand: number }[];
   dispatches: { id: number; no: string; date: string; cancelled: boolean; invoiceId: number | null; invoiceNo: string | null; qty: number }[];
 }
@@ -547,7 +570,11 @@ export const api = {
   unreceiveLot: (id: number) => req('POST', `/api/lots/${id}/unreceive`, {}),
   deleteLot: (id: number) => req('DELETE', `/api/lots/${id}`),
 
-  orders: (o: { status?: 'open' | 'all'; customerId?: number; q?: string } = {}) => req<OrderSummary[]>('GET', `/api/orders${qs(o)}`),
+  orders: (o: { status?: 'open' | 'all' | 'portal'; customerId?: number; q?: string } = {}) => req<OrderSummary[]>('GET', `/api/orders${qs(o)}`),
+  incomingOrders: () => req<{ count: number }>('GET', '/api/orders/incoming'),
+  portalUsers: () => req<PortalUser[]>('GET', '/api/portal-users'),
+  savePortalUser: (id: number | null, b: PortalUserInput) => req<{ id: number }>(id ? 'PUT' : 'POST', id ? `/api/portal-users/${id}` : '/api/portal-users', b),
+  deletePortalUser: (id: number) => req<{ ok: boolean; deactivated?: boolean }>('DELETE', `/api/portal-users/${id}`),
   order: (id: number) => req<OrderDetail>('GET', `/api/orders/${id}`),
   createOrder: (b: OrderInput) => req<{ id: number; no: string }>('POST', '/api/orders', b),
   updateOrder: (id: number, b: Omit<OrderInput, 'customerId'>) => req('PUT', `/api/orders/${id}`, b),

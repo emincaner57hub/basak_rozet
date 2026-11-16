@@ -21,7 +21,7 @@ const lineSchema = z.object({
   /** Verilmezse müşterinin fiyatı (özel fiyat, yoksa liste fiyatı) */
   unitPrice: z.number().int().min(0).nullish(),
 });
-const orderSchema = z.object({
+export const orderSchema = z.object({
   customerId: z.number().int().positive(),
   date: daySchema,
   channel: z.enum(['panel', 'phone', 'whatsapp', 'email', 'excel', 'portal']).default('panel'),
@@ -46,7 +46,7 @@ async function priceLines(q: Queryable, customerId: number, lines: z.infer<typeo
   });
 }
 
-async function createOrder(q: Queryable, b: z.infer<typeof orderSchema>, userId: number | null, batch: string | null = null) {
+export async function createOrder(q: Queryable, b: z.infer<typeof orderSchema>, userId: number | null, batch: string | null = null) {
   const lines = await priceLines(q, b.customerId, b.lines);
   const no = await nextNo(q, 'orders', 'SIP', b.date);
   const [{ id }] = await q.query<{ id: number }>(
@@ -62,8 +62,10 @@ async function createOrder(q: Queryable, b: z.infer<typeof orderSchema>, userId:
 export async function orderDetail(q: Queryable, id: number) {
   const [o] = await q.query<Row>(
     `SELECT o.id, o.no, o.date, o.customer_id "customerId", c.name "customerName", c.kind "customerKind", ch.name "chainName",
-            o.channel, o.cancelled, o.requested_date "requestedDate", o.customer_ref "customerRef", o.note, o.batch, o.created_at "createdAt"
-     FROM orders o JOIN customers c ON c.id = o.customer_id LEFT JOIN customers ch ON ch.id = c.parent_id WHERE o.id = $1`,
+            o.channel, o.cancelled, o.requested_date "requestedDate", o.customer_ref "customerRef", o.note, o.batch, o.created_at "createdAt",
+            pu.name "portalUser", pu.phone "portalPhone"
+     FROM orders o JOIN customers c ON c.id = o.customer_id LEFT JOIN customers ch ON ch.id = c.parent_id
+          LEFT JOIN portal_users pu ON pu.id = o.portal_user_id WHERE o.id = $1`,
     [id],
   );
   if (!o) throw fail(404, 'Sipariş bulunamadı');
@@ -90,7 +92,7 @@ export async function orderDetail(q: Queryable, id: number) {
   };
 }
 
-const statusOf = (cancelled: boolean, qty: number, shipped: number) =>
+export const statusOf = (cancelled: boolean, qty: number, shipped: number) =>
   shipped >= qty && qty > 0 ? 'shipped' : cancelled ? (shipped > 0 ? 'closed' : 'cancelled') : shipped > 0 ? 'partial' : 'open';
 
 // ---------- Excel ----------
@@ -283,25 +285,39 @@ export async function orderTemplate(q: Queryable, chainId: number | null) {
 export function registerOrders(app: FastifyInstance, { db, currentUser, now }: { db: Db; currentUser: (r: object) => { id: number } | null; now: () => Date }) {
   app.get('/api/orders', async (req) => {
     const q = z
-      .object({ status: z.enum(['open', 'all']).default('open'), customerId: z.coerce.number().int().optional(), q: z.string().max(80).optional() })
+      .object({ status: z.enum(['open', 'all', 'portal']).default('open'), customerId: z.coerce.number().int().optional(), q: z.string().max(80).optional() })
       .parse(req.query);
     const rows = await db.query<Row & { cancelled: boolean; qty: number; shipped: number }>(
       `SELECT o.id, o.no, o.date, o.channel, o.cancelled, o.requested_date "requestedDate", o.customer_ref "customerRef", o.batch,
-              c.id "customerId", c.name "customerName", ch.name "chainName",
+              c.id "customerId", c.name "customerName", ch.name "chainName", pu.name "portalUser",
+              (o.portal_user_id IS NOT NULL AND o.seen_at IS NULL) "isNew",
               (SELECT COALESCE(SUM(ol.qty),0) FROM order_lines ol WHERE ol.order_id = o.id) qty,
               (SELECT COALESCE(SUM(LEAST(ol.qty, ${SHIPPED('ol')})),0) FROM order_lines ol WHERE ol.order_id = o.id) shipped,
               (SELECT COALESCE(SUM(ol.qty * ol.unit_price),0) FROM order_lines ol WHERE ol.order_id = o.id) total
        FROM orders o JOIN customers c ON c.id = o.customer_id LEFT JOIN customers ch ON ch.id = c.parent_id
+            LEFT JOIN portal_users pu ON pu.id = o.portal_user_id
        WHERE ($1::int IS NULL OR o.customer_id = $1 OR c.parent_id = $1)
+         AND ($3::bool IS NOT TRUE OR o.portal_user_id IS NOT NULL)
          AND ($2::text IS NULL OR o.no ILIKE '%' || $2 || '%' OR c.name ILIKE '%' || $2 || '%' OR ch.name ILIKE '%' || $2 || '%' OR o.customer_ref ILIKE '%' || $2 || '%')
        ORDER BY o.date DESC, o.id DESC LIMIT 500`,
-      [q.customerId ?? null, q.q?.trim() || null],
+      [q.customerId ?? null, q.q?.trim() || null, q.status === 'portal'],
     );
     const out = rows.map((r) => ({ ...r, status: statusOf(r.cancelled, r.qty, r.shipped) }));
     return q.status === 'open' ? out.filter((r) => r.status === 'open' || r.status === 'partial') : out;
   });
 
-  app.get('/api/orders/:id', async (req) => orderDetail(db, idParam(req.params)));
+  /** Portaldan gelip henüz açılmamış siparişler (menü rozeti, panel) */
+  app.get('/api/orders/incoming', async () => {
+    const [r] = await db.query<{ n: number }>('SELECT COUNT(*)::int n FROM orders WHERE portal_user_id IS NOT NULL AND seen_at IS NULL AND NOT cancelled');
+    return { count: r.n };
+  });
+
+  app.get('/api/orders/:id', async (req) => {
+    const id = idParam(req.params);
+    const d = await orderDetail(db, id);
+    await db.query('UPDATE orders SET seen_at = now() WHERE id = $1 AND portal_user_id IS NOT NULL AND seen_at IS NULL', [id]);
+    return d;
+  });
 
   app.post('/api/orders', async (req) => {
     const b = orderSchema.parse(req.body);

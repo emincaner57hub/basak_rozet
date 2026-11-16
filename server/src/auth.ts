@@ -52,10 +52,10 @@ export function registerAuth(app: FastifyInstance, o: { db: Db; secret: string; 
   app.addHook('onRequest', async (req, reply) => {
     if (!req.url.startsWith('/api/')) return;
     const path = req.url.split('?')[0];
-    if (OPEN.has(path)) return;
+    if (OPEN.has(path) || path.startsWith('/api/portal/')) return; // portal kendi oturumuyla (portal.ts)
     const u = await userOf(req.cookies[SESSION_COOKIE]);
     if (!u) return reply.status(401).send({ error: 'Giriş gerekli' });
-    if (path.startsWith('/api/users') && u.role !== 'admin') return reply.status(403).send({ error: 'Bu işlem için yönetici olmalısınız' });
+    if ((path.startsWith('/api/users') || path.startsWith('/api/portal-users')) && u.role !== 'admin') return reply.status(403).send({ error: 'Bu işlem için yönetici olmalısınız' });
     users.set(req, u);
   });
 

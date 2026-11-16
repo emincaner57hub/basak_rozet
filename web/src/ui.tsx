@@ -56,10 +56,10 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[]) {
 // ---------- Düzen ----------
 export function Page({ title, subtitle, actions, children, back }: { title: ReactNode; subtitle?: ReactNode; actions?: ReactNode; children: ReactNode; back?: ReactNode }) {
   return (
-    <div className="mx-auto max-w-[1280px] px-6 py-5">
+    <div className="mx-auto max-w-[1280px] px-4 py-4 md:px-6 md:py-5">
       {back && <div className="no-print mb-1 text-sm">{back}</div>}
       <div className="mb-4 flex flex-wrap items-start gap-3">
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-full sm:basis-0">
           <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
           {subtitle && <div className="mt-0.5 text-sm text-muted">{subtitle}</div>}
         </div>

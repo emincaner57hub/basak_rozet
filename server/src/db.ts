@@ -411,6 +411,27 @@ const MIGRATIONS: string[] = [
   ALTER TABLE e_invoices ADD COLUMN note TEXT;
   UPDATE e_invoices SET sale_kind = 'faturali' WHERE direction = 'out';
   `,
+  // 4 — Müşteri portalı: satın almacı kullanıcıları (kod + şifre), atandıkları zincir / şube / tek kafe; portal siparişleri
+  `
+  CREATE TABLE portal_users (
+    id            SERIAL PRIMARY KEY,
+    code          TEXT NOT NULL UNIQUE,           -- giriş kodu (küçük harf)
+    name          TEXT NOT NULL,
+    phone         TEXT,
+    email         TEXT,
+    password_hash TEXT NOT NULL,
+    active        BOOLEAN NOT NULL DEFAULT TRUE,
+    last_login    TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  CREATE TABLE portal_user_customers (
+    user_id     INTEGER NOT NULL REFERENCES portal_users(id) ON DELETE CASCADE,
+    customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, customer_id)
+  );
+  ALTER TABLE orders ADD COLUMN portal_user_id INTEGER REFERENCES portal_users(id);
+  ALTER TABLE orders ADD COLUMN seen_at TIMESTAMPTZ;   -- portal siparişini ekipten biri açtı
+  `,
 ];
 
 async function migrate(db: Db, MIGRATIONS: string[]) {
