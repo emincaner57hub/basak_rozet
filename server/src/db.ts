@@ -432,6 +432,11 @@ const MIGRATIONS: string[] = [
   ALTER TABLE orders ADD COLUMN portal_user_id INTEGER REFERENCES portal_users(id);
   ALTER TABLE orders ADD COLUMN seen_at TIMESTAMPTZ;   -- portal siparişini ekipten biri açtı
   `,
+  // 5 — Satılabilir: yalnız işaretli ürünler müşteri portalında sipariş verilebilir (mevcut satış ürünleri işaretli başlar)
+  `
+  ALTER TABLE products ADD COLUMN sellable BOOLEAN NOT NULL DEFAULT TRUE;
+  UPDATE products SET sellable = FALSE WHERE kind = 'promo';
+  `,
 ];
 
 async function migrate(db: Db, MIGRATIONS: string[]) {

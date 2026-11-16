@@ -22,7 +22,8 @@ interface Item {
   category: string | null;
   unit: string;
   vatRate: number;
-  price: number;
+  price: number | null;
+  special: boolean;
   image: string | null;
 }
 interface MyOrder {
@@ -182,7 +183,7 @@ function OrderTab({ branches, onSent }: { branches: Branch[]; onSent: () => void
     const s = q.trim().toLocaleLowerCase('tr');
     return (items ?? []).filter((p) => !s || `${p.code} ${p.name} ${p.category ?? ''}`.toLocaleLowerCase('tr').includes(s));
   }, [items, q]);
-  const lines = (items ?? []).filter((p) => cart[p.id] > 0);
+  const lines = (items ?? []).filter((p): p is Item & { price: number } => cart[p.id] > 0 && p.price != null);
   const total = lines.reduce((s, p) => s + p.price * cart[p.id], 0);
   const count = lines.reduce((s, p) => s + cart[p.id], 0);
   const setQty = (id: number, n: number) => setCart((c) => ({ ...c, [id]: Math.max(0, Math.min(100000, Math.round(n || 0))) }));
@@ -242,9 +243,18 @@ function OrderTab({ branches, onSent }: { branches: Branch[]; onSent: () => void
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium">{p.name}</div>
                 <div className="text-xs text-muted">
-                  {p.code} · {formatTL(p.price)} / {p.unit} <span className="opacity-70">+KDV</span>
+                  {p.code} ·{' '}
+                  {p.price != null ? (
+                    <>
+                      <span className={p.special ? 'font-semibold text-brand' : ''}>{formatTL(p.price)}</span> / {p.unit} <span className="opacity-70">+KDV</span>
+                      {p.special && <span className="ml-1 text-brand">size özel</span>}
+                    </>
+                  ) : (
+                    <span className="text-warn">fiyat için bizi arayın</span>
+                  )}
                 </div>
               </div>
+              {p.price != null && (
               <div className="flex shrink-0 items-center">
                 {n > 0 && (
                   <button className="h-10 w-10 rounded-l-lg border border-line bg-card text-xl" onClick={() => setQty(p.id, n - 1)} aria-label="Azalt">
@@ -263,11 +273,14 @@ function OrderTab({ branches, onSent }: { branches: Branch[]; onSent: () => void
                   +
                 </button>
               </div>
+              )}
             </li>
           );
         })}
       </ul>
-      {items && !shown.length && <p className="m-4 text-sm text-muted">Ürün bulunamadı.</p>}
+      {items && !shown.length && (
+        <p className="m-4 text-sm text-muted">{items.length ? 'Aramaya uyan ürün yok.' : 'Bu şube için sipariş verilebilir ürün yok. Başak Rozet\'e haber verin.'}</p>
+      )}
       {count > 0 && (
         <div className="fixed inset-x-0 bottom-[calc(60px+env(safe-area-inset-bottom))] z-20 mx-auto max-w-xl px-3 pb-2">
           <button className="btn btn-primary flex w-full items-center justify-between py-3.5 text-base shadow-lg" onClick={() => setReview(true)}>
@@ -294,7 +307,7 @@ function OrderTab({ branches, onSent }: { branches: Branch[]; onSent: () => void
   );
 }
 
-function Review({ branch, lines, onClose, onDone }: { branch: Branch; lines: (Item & { qty: number })[]; onClose: () => void; onDone: (no: string) => void }) {
+function Review({ branch, lines, onClose, onDone }: { branch: Branch; lines: (Item & { price: number; qty: number })[]; onClose: () => void; onDone: (no: string) => void }) {
   const [requestedDate, setRequestedDate] = useState(today(1));
   const [ref, setRef] = useState('');
   const [note, setNote] = useState('');

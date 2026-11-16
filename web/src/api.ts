@@ -43,6 +43,8 @@ export interface Product {
   minQty: number | null;
   image: string | null;
   active: boolean;
+  /** Müşteri portalında (cepten) sipariş verilebilir */
+  sellable: boolean;
   avgCost: number | null;
   onHand: number;
   onOrder: number;
@@ -541,6 +543,7 @@ export const api = {
   statement: (customerId: number, o: { from?: string; to?: string } = {}) => req<Statement>('GET', `/api/customers/${customerId}/statement${qs(o)}`),
 
   products: (o: { q?: string; all?: boolean; kind?: 'sale' | 'promo' } = {}) => req<Product[]>('GET', `/api/products${qs({ q: o.q, all: o.all ? '1' : null, kind: o.kind })}`),
+  setSellable: (id: number, sellable: boolean) => req<{ ok: boolean }>('POST', `/api/products/${id}/sellable`, { sellable }),
   saveProduct: (id: number | null, b: ProductInput) => req<{ id: number }>(id ? 'PUT' : 'POST', id ? `/api/products/${id}` : '/api/products', b),
   deleteProduct: (id: number) => req('DELETE', `/api/products/${id}`),
   productMoves: (id: number) => req<StockMove[]>('GET', `/api/products/${id}/moves`),

@@ -52,8 +52,8 @@ export async function priceScopes(q: Queryable, customerId: number): Promise<num
 export async function catalogFor(q: Queryable, customerId: number) {
   const scopes = await priceScopes(q, customerId);
   const chainId = scopes.length > 1 ? scopes[1] : scopes[0];
-  return q.query<{ id: number; code: string; name: string; kind: string; category: string | null; unit: string; vatRate: number; listPrice: number | null; price: number | null; special: boolean; onHand: number; chainId: number | null; image: string | null }>(
-    `SELECT p.id, p.code, p.name, p.kind, p.category, p.unit, p.vat_rate "vatRate", p.list_price "listPrice", p.chain_id "chainId", p.image,
+  return q.query<{ id: number; code: string; name: string; kind: string; category: string | null; unit: string; vatRate: number; listPrice: number | null; price: number | null; special: boolean; onHand: number; chainId: number | null; image: string | null; sellable: boolean }>(
+    `SELECT p.id, p.code, p.name, p.kind, p.category, p.unit, p.vat_rate "vatRate", p.list_price "listPrice", p.chain_id "chainId", p.image, p.sellable,
             COALESCE((SELECT pr.price FROM prices pr WHERE pr.product_id = p.id AND pr.customer_id = ANY($1::int[])
                       ORDER BY array_position($1::int[], pr.customer_id) LIMIT 1), p.list_price) price,
             EXISTS (SELECT 1 FROM prices pr WHERE pr.product_id = p.id AND pr.customer_id = ANY($1::int[])) special,

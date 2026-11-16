@@ -46,12 +46,19 @@ export function ProductsPage() {
           {low > 0 && <span className="ml-3 font-semibold text-warn">{low} üründe stok kritik</span>}
         </span>
       </div>
-      <div className="card overflow-hidden">
+      {tab === 'sale' && (
+        <p className="mb-2 text-sm text-muted">
+          <b>Satılabilir</b> işaretli rozetler müşterinin satın almacısına cepte (portal) görünür. Fiyat: müşteriye özel fiyat (şube → zincir), yoksa liste
+          fiyatı; ikisi de yoksa ürün görünür ama sipariş verilemez.
+        </p>
+      )}
+      <div className="card overflow-x-auto">
         <table className="tbl">
           <thead>
             <tr>
               <th className="w-12" />
               <th>Ürün</th>
+              {tab === 'sale' && <th title="Müşteri cepten sipariş verebilir">Satılabilir</th>}
               {tab === 'sale' && <th className="text-right">Liste fiyatı</th>}
               <th className="text-right">Ort. maliyet</th>
               {tab === 'sale' && <th className="text-right">Marj</th>}
@@ -75,6 +82,22 @@ export function ProductsPage() {
                       {p.chainName && <Badge tone="brand">Özel: {p.chainName}</Badge>}
                     </div>
                   </td>
+                  {tab === 'sale' && (
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <label className="flex cursor-pointer items-center gap-1.5 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={p.sellable}
+                          onChange={async (e) => {
+                            await api.setSellable(p.id, e.target.checked);
+                            reload();
+                          }}
+                        />
+                        {p.sellable ? <span className="text-ok">cepte açık</span> : <span className="text-muted">kapalı</span>}
+                        {p.sellable && p.listPrice == null && <span className="text-warn" title="Liste fiyatı yok: yalnız özel fiyatı olan müşteriler sipariş verebilir">· fiyat?</span>}
+                      </label>
+                    </td>
+                  )}
                   {tab === 'sale' && <td className="tabular text-right">{formatTL(p.listPrice)}</td>}
                   <td className="tabular text-right text-muted">{formatUnit(p.avgCost)}</td>
                   {tab === 'sale' && <td className="tabular text-right">{p.listPrice && p.avgCost ? fmtPct(1 - p.avgCost / p.listPrice) : '—'}</td>}
@@ -132,6 +155,7 @@ export function ProductEditor({ initial, onClose, onSaved }: { initial: Partial<
     minQty: initial.minQty ?? null,
     image: initial.image ?? null,
     active: initial.active ?? true,
+    sellable: initial.sellable ?? true,
   });
   const [err, setErr] = useState('');
   const set = <K extends keyof ProductInput>(k: K, v: ProductInput[K]) => setF((x) => ({ ...x, [k]: v }));
@@ -213,6 +237,11 @@ export function ProductEditor({ initial, onClose, onSaved }: { initial: Partial<
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={f.active} onChange={(e) => set('active', e.target.checked)} /> Aktif
         </label>
+        {f.kind === 'sale' && (
+          <label className="flex items-center gap-2" title="İşaretliyse müşterinin satın almacısı cepten bu ürüne sipariş verebilir">
+            <input type="checkbox" checked={f.sellable} onChange={(e) => set('sellable', e.target.checked)} /> Satılabilir (müşteri cepten sipariş verebilir)
+          </label>
+        )}
         {f.chainId && <button className="text-brand" onClick={() => set('chainId', null)}>Özel tasarımı kaldır</button>}
         {f.image && (
           <button className="text-bad" onClick={() => set('image', null)}>

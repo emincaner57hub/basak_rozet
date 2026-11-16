@@ -100,10 +100,11 @@ export function registerPortal(app: FastifyInstance, o: { db: Db; secret: string
     const u = await need(req);
     const { customerId } = z.object({ customerId: z.coerce.number().int().positive() }).parse(req.query);
     await checkCustomer(u.id, customerId);
-    // Stok ve maliyet müşteriye gösterilmez
+    // Yalnız "satılabilir" satış ürünleri; fiyat: müşteriye (şube → zincir) özel, yoksa liste fiyatı.
+    // Fiyatı hiç olmayan ürün görünür ama sipariş verilemez. Stok ve maliyet müşteriye gösterilmez.
     return (await catalogFor(db, customerId))
-      .filter((p) => p.kind === 'sale' && p.price != null)
-      .map((p) => ({ id: p.id, code: p.code, name: p.name, category: p.category, unit: p.unit, vatRate: Number(p.vatRate), price: p.price, image: p.image }));
+      .filter((p) => p.kind === 'sale' && p.sellable)
+      .map((p) => ({ id: p.id, code: p.code, name: p.name, category: p.category, unit: p.unit, vatRate: Number(p.vatRate), price: p.price, special: p.special, image: p.image }));
   });
 
   app.post('/api/portal/orders', async (req) => {
@@ -118,6 +119,12 @@ export function registerPortal(app: FastifyInstance, o: { db: Db; secret: string
       })
       .parse(req.body);
     await checkCustomer(u.id, b.customerId);
+    const cat = new Map((await catalogFor(db, b.customerId)).map((p) => [p.id, p]));
+    for (const l of b.lines) {
+      const p = cat.get(l.productId);
+      if (!p || p.kind !== 'sale' || !p.sellable) throw fail(400, 'Ürün sipariş için açık değil');
+      if (p.price == null) throw fail(400, `${p.name} için fiyat tanımlı değil; Başak Rozet'e sorun`);
+    }
     const body = orderSchema.parse({ ...b, date: todayTr(o.now()), channel: 'portal', lines: b.lines.map((l) => ({ ...l, unitPrice: null })) });
     return db.tx(async (q) => {
       const r = await createOrder(q, body, null);

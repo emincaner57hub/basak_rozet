@@ -29,6 +29,7 @@ const productSchema = z.object({
     .regex(/^data:image\/(png|jpe?g|webp|gif);base64,/, 'Görsel PNG/JPG/WEBP olmalı')
     .nullish(),
   active: z.boolean().default(true),
+  sellable: z.boolean().default(true), // müşteri portalında sipariş verilebilir
 });
 
 const mapProduct = (r: Row) => ({
@@ -46,6 +47,7 @@ const mapProduct = (r: Row) => ({
   minQty: r.min_qty,
   image: r.image ?? null,
   active: r.active,
+  sellable: r.kind === 'sale' && r.sellable !== false,
   avgCost: r.avg_cost,
   onHand: r.on_hand ?? 0,
   onOrder: r.on_order ?? 0,
@@ -74,25 +76,32 @@ export function registerProducts(app: FastifyInstance, { db }: { db: Db }) {
       const [c] = await db.query<{ kind: string }>('SELECT kind FROM customers WHERE id = $1', [b.chainId]);
       if (!c || c.kind === 'branch') throw fail(400, 'Özel ürün bir zincire ya da tek kafeye bağlanabilir');
     }
-    const vals = [b.code, b.name, b.kind, b.category, b.description, b.unit, b.vatRate, b.kind === 'promo' ? null : (b.listPrice ?? null), b.chainId ?? null, b.minQty ?? null, b.image ?? null, b.active];
+    const vals = [b.code, b.name, b.kind, b.category, b.description, b.unit, b.vatRate, b.kind === 'promo' ? null : (b.listPrice ?? null), b.chainId ?? null, b.minQty ?? null, b.image ?? null, b.active, b.kind === 'sale' && b.sellable];
     if (id) {
       const r = await db.query(
-        `UPDATE products SET code=$1, name=$2, kind=$3, category=$4, description=$5, unit=$6, vat_rate=$7, list_price=$8, chain_id=$9, min_qty=$10, image=$11, active=$12
-         WHERE id=$13 RETURNING id`,
+        `UPDATE products SET code=$1, name=$2, kind=$3, category=$4, description=$5, unit=$6, vat_rate=$7, list_price=$8, chain_id=$9, min_qty=$10, image=$11, active=$12, sellable=$13
+         WHERE id=$14 RETURNING id`,
         [...vals, id],
       );
       if (!r.length) throw fail(404, 'Ürün bulunamadı');
       return { id };
     }
     const [r] = await db.query<{ id: number }>(
-      `INSERT INTO products(code, name, kind, category, description, unit, vat_rate, list_price, chain_id, min_qty, image, active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+      `INSERT INTO products(code, name, kind, category, description, unit, vat_rate, list_price, chain_id, min_qty, image, active, sellable)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
       vals,
     );
     return r;
   }
   app.post('/api/products', async (req) => save(null, req.body));
   app.put('/api/products/:id', async (req) => save(idParam(req.params), req.body));
+  /** Listeden tek tıkla: müşteri portalında satılabilir */
+  app.post('/api/products/:id/sellable', async (req) => {
+    const b = z.object({ sellable: z.boolean() }).parse(req.body);
+    const r = await db.query("UPDATE products SET sellable = $1 WHERE id = $2 AND kind = 'sale' RETURNING id", [b.sellable, idParam(req.params)]);
+    if (!r.length) throw fail(404, 'Satış ürünü bulunamadı');
+    return { ok: true };
+  });
   app.delete('/api/products/:id', async (req) => {
     const id = idParam(req.params);
     const used = await db.query(

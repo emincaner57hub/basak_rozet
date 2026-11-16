@@ -79,6 +79,15 @@ describe('Başak Rozet akışı', () => {
     const d = await req('GET', `/api/orders/${o.body.id}`);
     expect(d.portalUser).toBe('Ayşe');
     expect((await req('GET', '/api/orders/incoming')).count).toBe(0); // açıldı → görüldü
+    // Satılabilir işareti kalkan ürün portalda yok, sipariş verilemez; fiyatı olmayan görünür ama sipariş verilemez
+    await req('POST', `/api/products/${s.b.id}/sellable`, { sellable: false });
+    const cat2 = (await preq('GET', `/api/portal/catalog?customerId=${s.moda.id}`)).body;
+    expect(cat2.find((p: any) => p.code === 'R-2')).toBeUndefined();
+    expect((await preq('POST', '/api/portal/orders', { customerId: s.moda.id, lines: [{ productId: s.b.id, qty: 1 }] })).status).toBe(400);
+    const np = await req('POST', '/api/products', { code: 'R-9', name: 'Fiyatsız' });
+    expect((await preq('GET', `/api/portal/catalog?customerId=${s.moda.id}`)).body.find((p: any) => p.code === 'R-9')).toMatchObject({ price: null });
+    expect((await preq('POST', '/api/portal/orders', { customerId: s.moda.id, lines: [{ productId: np.id, qty: 1 }] })).status).toBe(400);
+    expect((await req<any[]>('GET', '/api/products')).find((p) => p.id === s.b.id).sellable).toBe(false);
     // kullanıcı pasif → giriş yok
     await req('PUT', `/api/portal-users/${pu.id}`, { code: 'ayse.kd', name: 'Ayşe', active: false, customerIds: [s.chain.id] });
     expect((await preq('GET', '/api/portal/orders')).status).toBe(401);
