@@ -159,6 +159,7 @@ export interface PortalUser {
   phone: string | null;
   email: string | null;
   active: boolean;
+  seePrices: boolean;
   lastLogin: string | null;
   customers: { id: number; name: string; kind: CustomerKind }[];
 }
@@ -168,6 +169,7 @@ export interface PortalUserInput {
   phone: string | null;
   email: string | null;
   active: boolean;
+  seePrices: boolean;
   password?: string | null;
   customerIds: number[];
 }

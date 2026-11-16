@@ -22,8 +22,9 @@ interface Item {
   category: string | null;
   unit: string;
   vatRate: number;
-  price: number | null;
+  price: number | null; // "fiyat görebilir" kapalıysa hep boş
   special: boolean;
+  orderable: boolean;
   image: string | null;
 }
 interface MyOrder {
@@ -36,12 +37,12 @@ interface MyOrder {
   byName: string | null;
   qty: number;
   shipped: number;
-  total: number;
+  total: number | null;
   status: OrderStatus;
 }
 interface MyOrderDetail extends MyOrder {
   note: string | null;
-  lines: { code: string; name: string; unit: string; qty: number; unitPrice: number; shipped: number }[];
+  lines: { code: string; name: string; unit: string; qty: number; unitPrice: number | null; shipped: number }[];
 }
 
 async function preq<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -62,11 +63,11 @@ const STATUS_TEXT: Record<OrderStatus, string> = { open: 'Alındı', partial: 'K
 
 export default function PortalApp() {
   const [state, setState] = useState<'loading' | 'login' | 'ok'>('loading');
-  const [me, setMe] = useState<{ name: string; code: string } | null>(null);
+  const [me, setMe] = useState<{ name: string; code: string; seePrices: boolean } | null>(null);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [tab, setTab] = useState<'order' | 'mine'>('order');
   const load = () =>
-    preq<{ user: { name: string; code: string } | null; customers: Branch[] }>('GET', '/api/portal/session').then(
+    preq<{ user: { name: string; code: string; seePrices: boolean } | null; customers: Branch[] }>('GET', '/api/portal/session').then(
       (s) => {
         setMe(s.user);
         setBranches(s.customers);
@@ -92,7 +93,7 @@ export default function PortalApp() {
           Çıkış
         </button>
       </header>
-      {tab === 'order' ? <OrderTab branches={branches} onSent={() => setTab('mine')} /> : <MineTab />}
+      {tab === 'order' ? <OrderTab branches={branches} seePrices={!!me?.seePrices} onSent={() => setTab('mine')} /> : <MineTab />}
       <nav className="fixed inset-x-0 bottom-0 z-20 mx-auto flex max-w-xl border-t border-line bg-card pb-[env(safe-area-inset-bottom)]">
         {(
           [
@@ -153,7 +154,7 @@ function PortalLogin({ onDone }: { onDone: () => void }) {
   );
 }
 
-function OrderTab({ branches, onSent }: { branches: Branch[]; onSent: () => void }) {
+function OrderTab({ branches, seePrices, onSent }: { branches: Branch[]; seePrices: boolean; onSent: () => void }) {
   const [branchId, setBranchId] = useState<number | null>(() => {
     try {
       const v = Number(localStorage.getItem('portal.branch'));
@@ -183,8 +184,8 @@ function OrderTab({ branches, onSent }: { branches: Branch[]; onSent: () => void
     const s = q.trim().toLocaleLowerCase('tr');
     return (items ?? []).filter((p) => !s || `${p.code} ${p.name} ${p.category ?? ''}`.toLocaleLowerCase('tr').includes(s));
   }, [items, q]);
-  const lines = (items ?? []).filter((p): p is Item & { price: number } => cart[p.id] > 0 && p.price != null);
-  const total = lines.reduce((s, p) => s + p.price * cart[p.id], 0);
+  const lines = (items ?? []).filter((p) => cart[p.id] > 0 && p.orderable);
+  const total = lines.reduce((s, p) => s + (p.price ?? 0) * cart[p.id], 0);
   const count = lines.reduce((s, p) => s + cart[p.id], 0);
   const setQty = (id: number, n: number) => setCart((c) => ({ ...c, [id]: Math.max(0, Math.min(100000, Math.round(n || 0))) }));
 
@@ -243,36 +244,40 @@ function OrderTab({ branches, onSent }: { branches: Branch[]; onSent: () => void
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium">{p.name}</div>
                 <div className="text-xs text-muted">
-                  {p.code} ·{' '}
+                  {p.code}
                   {p.price != null ? (
                     <>
+                      {' · '}
                       <span className={p.special ? 'font-semibold text-brand' : ''}>{formatTL(p.price)}</span> / {p.unit} <span className="opacity-70">+KDV</span>
                       {p.special && <span className="ml-1 text-brand">size özel</span>}
                     </>
+                  ) : !p.orderable ? (
+                    <span className="text-warn"> · fiyat için bizi arayın</span>
                   ) : (
-                    <span className="text-warn">fiyat için bizi arayın</span>
+                    <span> · {p.unit}</span>
                   )}
                 </div>
               </div>
-              {p.price != null && (
-              <div className="flex shrink-0 items-center">
-                {n > 0 && (
-                  <button className="h-10 w-10 rounded-l-lg border border-line bg-card text-xl" onClick={() => setQty(p.id, n - 1)} aria-label="Azalt">
+              {p.orderable && (
+                <div className="flex shrink-0 items-center">
+                  <button className="h-10 w-10 rounded-l-lg border border-line bg-card text-xl disabled:opacity-30" disabled={!n} onClick={() => setQty(p.id, n - 1)} aria-label="Azalt">
                     −
                   </button>
-                )}
-                {n > 0 && (
+                  {/* Adet yazılabilir: odaklanınca seçilir, yazınca değişir */}
                   <input
-                    className="h-10 w-14 border-y border-line bg-card text-center text-base tabular-nums"
+                    className={`h-10 w-16 border-y border-line text-center text-base tabular-nums ${n ? 'bg-card font-semibold' : 'bg-card text-muted'}`}
                     inputMode="numeric"
-                    value={n}
+                    pattern="[0-9]*"
+                    placeholder="0"
+                    value={n || ''}
+                    onFocus={(e) => e.target.select()}
                     onChange={(e) => setQty(p.id, Number(e.target.value.replace(/\D/g, '')))}
+                    aria-label={`${p.name} adet`}
                   />
-                )}
-                <button className={`h-10 w-10 border border-line text-xl ${n ? 'rounded-r-lg bg-card' : 'rounded-lg bg-brand text-white'}`} onClick={() => setQty(p.id, n + 1)} aria-label="Ekle">
-                  +
-                </button>
-              </div>
+                  <button className="h-10 w-10 rounded-r-lg border border-brand bg-brand text-xl text-white" onClick={() => setQty(p.id, n + 1)} aria-label="Ekle">
+                    +
+                  </button>
+                </div>
               )}
             </li>
           );
@@ -287,12 +292,13 @@ function OrderTab({ branches, onSent }: { branches: Branch[]; onSent: () => void
             <span>
               {lines.length} ürün · {count} adet
             </span>
-            <span>{formatTL(total)} + KDV ›</span>
+            <span>{seePrices ? `${formatTL(total)} + KDV ›` : 'Devam ›'}</span>
           </button>
         </div>
       )}
       {review && branch && (
         <Review
+          seePrices={seePrices}
           branch={branch}
           lines={lines.map((p) => ({ ...p, qty: cart[p.id] }))}
           onClose={() => setReview(false)}
@@ -307,14 +313,14 @@ function OrderTab({ branches, onSent }: { branches: Branch[]; onSent: () => void
   );
 }
 
-function Review({ branch, lines, onClose, onDone }: { branch: Branch; lines: (Item & { price: number; qty: number })[]; onClose: () => void; onDone: (no: string) => void }) {
+function Review({ branch, lines, seePrices, onClose, onDone }: { branch: Branch; lines: (Item & { qty: number })[]; seePrices: boolean; onClose: () => void; onDone: (no: string) => void }) {
   const [requestedDate, setRequestedDate] = useState(today(1));
   const [ref, setRef] = useState('');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const net = lines.reduce((s, l) => s + l.price * l.qty, 0);
-  const vat = lines.reduce((s, l) => s + Math.round((l.price * l.qty * l.vatRate) / 100), 0);
+  const net = lines.reduce((s, l) => s + (l.price ?? 0) * l.qty, 0);
+  const vat = lines.reduce((s, l) => s + Math.round(((l.price ?? 0) * l.qty * l.vatRate) / 100), 0);
   return (
     <div className="fixed inset-0 z-30 flex items-end bg-black/40" onClick={onClose}>
       <div className="mx-auto max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-t-2xl bg-card p-5 pb-[calc(20px+env(safe-area-inset-bottom))]" onClick={(e) => e.stopPropagation()}>
@@ -334,17 +340,26 @@ function Review({ branch, lines, onClose, onDone }: { branch: Branch; lines: (It
               <span className="min-w-0 truncate">
                 {l.qty} × {l.name}
               </span>
-              <span className="tabular-nums">{formatTL(l.price * l.qty)}</span>
+              {seePrices && <span className="tabular-nums">{formatTL((l.price ?? 0) * l.qty)}</span>}
             </li>
           ))}
-          <li className="flex justify-between px-3 py-2 text-muted">
-            <span>KDV</span>
-            <span className="tabular-nums">{formatTL(vat)}</span>
-          </li>
-          <li className="flex justify-between px-3 py-2 font-semibold">
-            <span>Toplam</span>
-            <span className="tabular-nums">{formatTL(net + vat)}</span>
-          </li>
+          {seePrices ? (
+            <>
+              <li className="flex justify-between px-3 py-2 text-muted">
+                <span>KDV</span>
+                <span className="tabular-nums">{formatTL(vat)}</span>
+              </li>
+              <li className="flex justify-between px-3 py-2 font-semibold">
+                <span>Toplam</span>
+                <span className="tabular-nums">{formatTL(net + vat)}</span>
+              </li>
+            </>
+          ) : (
+            <li className="flex justify-between px-3 py-2 font-semibold">
+              <span>Toplam</span>
+              <span className="tabular-nums">{lines.reduce((s, l) => s + l.qty, 0)} adet</span>
+            </li>
+          )}
         </ul>
         <label className="label">İstenen teslim tarihi</label>
         <input className="input mb-3 text-base" type="date" min={today()} value={requestedDate} onChange={(e) => setRequestedDate(e.target.value)} />
@@ -413,7 +428,7 @@ function MineTab() {
                     {l.qty} {l.unit} · gönderilen {Math.min(l.shipped, l.qty)}
                   </div>
                 </span>
-                <span className="tabular-nums">{formatTL(l.qty * l.unitPrice)}</span>
+                {l.unitPrice != null && <span className="tabular-nums">{formatTL(l.qty * l.unitPrice)}</span>}
               </li>
             ))}
           </ul>
@@ -441,7 +456,7 @@ function MineTab() {
               </div>
               <div className="text-right">
                 <Badge tone={ORDER_STATUS[o.status].tone}>{STATUS_TEXT[o.status]}</Badge>
-                <div className="mt-1 text-sm tabular-nums">{formatTL(o.total)}</div>
+                {o.total != null && <div className="mt-1 text-sm tabular-nums">{formatTL(o.total)}</div>}
               </div>
             </button>
           </li>

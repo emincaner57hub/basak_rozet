@@ -234,7 +234,7 @@ function PortalUsersCard() {
           {data?.map((u) => (
             <tr key={u.id} className="clickable" onClick={() => setEdit(u)}>
               <td className="font-medium">
-                {u.name} {!u.active && <Badge tone="bad">Pasif</Badge>}
+                {u.name} {!u.active && <Badge tone="bad">Pasif</Badge>} {!u.seePrices && <Badge>fiyat gizli</Badge>}
                 {u.phone && <div className="text-xs font-normal text-muted">{u.phone}</div>}
               </td>
               <td className="font-mono text-sm">{u.code}</td>
@@ -277,6 +277,7 @@ function PortalUserDialog({ u, onClose, onSaved }: { u: PortalUser | null; onClo
   const [phone, setPhone] = useState(u?.phone ?? '');
   const [email, setEmail] = useState(u?.email ?? '');
   const [active, setActive] = useState(u?.active ?? true);
+  const [seePrices, setSeePrices] = useState(u?.seePrices ?? true);
   const [password, setPassword] = useState('');
   const [ids, setIds] = useState<number[]>(u?.customers.map((c) => c.id) ?? []);
   const [err, setErr] = useState('');
@@ -311,7 +312,7 @@ function PortalUserDialog({ u, onClose, onSaved }: { u: PortalUser | null; onClo
             className="btn btn-primary"
             onClick={async () => {
               try {
-                await api.savePortalUser(u?.id ?? null, { name, code, phone: phone || null, email: email || null, active, password: password || null, customerIds: ids });
+                await api.savePortalUser(u?.id ?? null, { name, code, phone: phone || null, email: email || null, active, seePrices, password: password || null, customerIds: ids });
                 toast(password ? `Kaydedildi · kod: ${code.toLowerCase()} — şifreyi satın almacıya iletin` : 'Kaydedildi');
                 onSaved();
               } catch (e) {
@@ -347,9 +348,14 @@ function PortalUserDialog({ u, onClose, onSaved }: { u: PortalUser | null; onClo
         <Field label="E-posta (isteğe bağlı)">
           <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
         </Field>
-        <label className="mt-6 flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} /> Aktif (girebilir)
-        </label>
+        <div className="mt-5 space-y-1 text-sm">
+          <label className="flex items-center gap-2">
+            <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} /> Aktif (girebilir)
+          </label>
+          <label className="flex items-center gap-2" title="Kapalıysa siparişte ve geçmiş siparişlerde fiyat / tutar görünmez">
+            <input type="checkbox" checked={seePrices} onChange={(e) => setSeePrices(e.target.checked)} /> Fiyat görebilir
+          </label>
+        </div>
       </div>
       <div className="mt-4">
         <div className="label">Sipariş verebileceği müşteriler</div>

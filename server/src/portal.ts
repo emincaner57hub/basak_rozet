@@ -25,6 +25,7 @@ interface PortalUser {
   id: number;
   code: string;
   name: string;
+  seePrices: boolean;
 }
 
 /** Satın almacının sipariş verebileceği müşteriler: atanan şube / tek kafe + atanan zincirlerin aktif şubeleri */
@@ -54,8 +55,8 @@ export function registerPortal(app: FastifyInstance, o: { db: Db; secret: string
     const want = sign(`${who}.${exp}`);
     if (want.length !== sig.length || !crypto.timingSafeEqual(Buffer.from(want), Buffer.from(sig))) return null;
     if (Number(exp) < o.now().getTime()) return null;
-    const [u] = await db.query<PortalUser & { active: boolean }>('SELECT id, code, name, active FROM portal_users WHERE id = $1', [Number(who.slice(1))]);
-    return u?.active ? { id: u.id, code: u.code, name: u.name } : null;
+    const [u] = await db.query<PortalUser & { active: boolean }>('SELECT id, code, name, active, see_prices "seePrices" FROM portal_users WHERE id = $1', [Number(who.slice(1))]);
+    return u?.active ? { id: u.id, code: u.code, name: u.name, seePrices: u.seePrices } : null;
   }
   async function need(req: FastifyRequest) {
     const u = await portalUser(req);
@@ -104,7 +105,13 @@ export function registerPortal(app: FastifyInstance, o: { db: Db; secret: string
     // Fiyatı hiç olmayan ürün görünür ama sipariş verilemez. Stok ve maliyet müşteriye gösterilmez.
     return (await catalogFor(db, customerId))
       .filter((p) => p.kind === 'sale' && p.sellable)
-      .map((p) => ({ id: p.id, code: p.code, name: p.name, category: p.category, unit: p.unit, vatRate: Number(p.vatRate), price: p.price, special: p.special, image: p.image }));
+      .map((p) => ({
+        id: p.id, code: p.code, name: p.name, category: p.category, unit: p.unit, vatRate: Number(p.vatRate), image: p.image,
+        orderable: p.price != null,
+        // "Fiyat görebilir" kapalıysa fiyat hiç gönderilmez
+        price: u.seePrices ? p.price : null,
+        special: u.seePrices ? p.special : false,
+      }));
   });
 
   app.post('/api/portal/orders', async (req) => {
@@ -146,7 +153,7 @@ export function registerPortal(app: FastifyInstance, o: { db: Db; secret: string
        WHERE o.customer_id = ANY($1::int[]) ORDER BY o.date DESC, o.id DESC LIMIT 100`,
       [ids],
     );
-    return rows.map((r) => ({ ...r, status: statusOf(r.cancelled, Number(r.qty), Number(r.shipped)) }));
+    return rows.map((r) => ({ ...r, total: u.seePrices ? r.total : null, status: statusOf(r.cancelled, Number(r.qty), Number(r.shipped)) }));
   });
 
   app.get('/api/portal/orders/:id', async (req) => {
@@ -167,7 +174,7 @@ export function registerPortal(app: FastifyInstance, o: { db: Db; secret: string
     );
     const qty = lines.reduce((s, l) => s + Number(l.qty), 0);
     const shipped = lines.reduce((s, l) => s + Math.min(Number(l.shipped), Number(l.qty)), 0);
-    return { ...ord, lines, status: statusOf(ord.cancelled, qty, shipped) };
+    return { ...ord, lines: u.seePrices ? lines : lines.map((l) => ({ ...l, unitPrice: null })), status: statusOf(ord.cancelled, qty, shipped) };
   });
 
   // ---------------- Ekip: satın almacı kullanıcıları (Ayarlar) ----------------
@@ -177,13 +184,14 @@ export function registerPortal(app: FastifyInstance, o: { db: Db; secret: string
     phone: optText(40),
     email: optText(120),
     active: z.boolean().default(true),
+    seePrices: z.boolean().default(true),
     password: z.string().min(6, 'Şifre en az 6 karakter').max(200).nullish(),
     customerIds: z.array(z.number().int().positive()).max(500).default([]),
   });
 
   app.get('/api/portal-users', async () =>
     db.query(
-      `SELECT u.id, u.code, u.name, u.phone, u.email, u.active, u.last_login "lastLogin",
+      `SELECT u.id, u.code, u.name, u.phone, u.email, u.active, u.see_prices "seePrices", u.last_login "lastLogin",
               COALESCE((SELECT json_agg(json_build_object('id', c.id, 'name', c.name, 'kind', c.kind) ORDER BY c.name)
                         FROM portal_user_customers pc JOIN customers c ON c.id = pc.customer_id WHERE pc.user_id = u.id), '[]') customers
        FROM portal_users u ORDER BY u.active DESC, u.name`,
@@ -198,13 +206,15 @@ export function registerPortal(app: FastifyInstance, o: { db: Db; secret: string
       if (dup.length && dup[0].id !== id) throw fail(409, 'Bu kullanıcı kodu kullanılıyor');
       let uid = id;
       if (id) {
-        const r = await q.query('UPDATE portal_users SET code=$1, name=$2, phone=$3, email=$4, active=$5 WHERE id=$6 RETURNING id', [b.code, b.name, b.phone, b.email, b.active, id]);
+        const r = await q.query('UPDATE portal_users SET code=$1, name=$2, phone=$3, email=$4, active=$5, see_prices=$6 WHERE id=$7 RETURNING id', [
+          b.code, b.name, b.phone, b.email, b.active, b.seePrices, id,
+        ]);
         if (!r.length) throw fail(404, 'Kullanıcı bulunamadı');
         if (b.password) await q.query('UPDATE portal_users SET password_hash=$1 WHERE id=$2', [await hashPassword(b.password), id]);
       } else {
         const [r] = await q.query<{ id: number }>(
-          'INSERT INTO portal_users(code, name, phone, email, active, password_hash) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
-          [b.code, b.name, b.phone, b.email, b.active, await hashPassword(b.password!)],
+          'INSERT INTO portal_users(code, name, phone, email, active, password_hash, see_prices) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',
+          [b.code, b.name, b.phone, b.email, b.active, await hashPassword(b.password!), b.seePrices],
         );
         uid = r.id;
       }

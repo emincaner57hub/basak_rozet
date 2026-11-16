@@ -437,6 +437,10 @@ const MIGRATIONS: string[] = [
   ALTER TABLE products ADD COLUMN sellable BOOLEAN NOT NULL DEFAULT TRUE;
   UPDATE products SET sellable = FALSE WHERE kind = 'promo';
   `,
+  // 6 — Satın almacı fiyat görebilir mi (kapalıysa portalda fiyat / tutar gösterilmez)
+  `
+  ALTER TABLE portal_users ADD COLUMN see_prices BOOLEAN NOT NULL DEFAULT TRUE;
+  `,
 ];
 
 async function migrate(db: Db, MIGRATIONS: string[]) {
