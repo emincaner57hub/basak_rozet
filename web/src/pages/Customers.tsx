@@ -1,13 +1,30 @@
 import { useMemo, useState } from 'react';
 import { api, KIND_LABEL, type Customer, type CustomerInput } from '../api';
-import { Link, useNav } from '../router';
+import { Link, queryParam, useNav } from '../router';
 import { Badge, Confirm, Empty, ErrorLine, Field, IntInput, Modal, MoneyInput, Page, SearchSelect, Stat, Tabs, useLoad, useToast } from '../ui';
 import { formatTL, today, trDate } from '../money';
 import { StatementView } from './Payments';
 import { OrdersTable } from './Orders';
 
 /** Müşteri listesi: zincirler şubeleriyle birlikte, tek kafeler ayrı */
+type KindFilter = 'all' | 'single' | 'chain' | 'branch';
+const KIND_FILTERS: [KindFilter, string][] = [
+  ['all', 'Tümü'],
+  ['single', 'Kafe'],
+  ['chain', 'Zincir'],
+  ['branch', 'Şube'],
+];
+
 export function CustomersPage() {
+  const { path } = useNav();
+  const [kind, setKindState] = useState<KindFilter>(() => {
+    const t = queryParam(path, 'tur');
+    return KIND_FILTERS.some(([k]) => k === t) ? (t as KindFilter) : 'all';
+  });
+  const setKind = (k: KindFilter) => {
+    setKindState(k);
+    history.replaceState(null, '', k === 'all' ? '/musteriler' : `/musteriler?tur=${k}`); // geri dönünce seçim kalsın
+  };
   const [q, setQ] = useState('');
   const [all, setAll] = useState(false);
   const [editing, setEditing] = useState<Partial<Customer> | null>(null);
@@ -18,6 +35,8 @@ export function CustomersPage() {
     const list = data ?? [];
     const s = q.trim().toLocaleLowerCase('tr');
     const hit = (c: Customer) => !s || [c.name, c.code, c.taxId, c.city, c.parentName].some((x) => x?.toLocaleLowerCase('tr').includes(s));
+    // Tür seçiliyse düz liste (şubeler zincir adıyla)
+    if (kind !== 'all') return list.filter((c) => c.kind === kind && hit(c)).map((c) => ({ c, depth: 0 }));
     const top = list.filter((c) => c.kind !== 'branch');
     const out: { c: Customer; depth: number }[] = [];
     for (const t of top) {
@@ -28,7 +47,7 @@ export function CustomersPage() {
       for (const k of kids) if (hit(k) || hit(t)) out.push({ c: k, depth: 1 });
     }
     return out;
-  }, [data, q]);
+  }, [data, q, kind]);
   const stats = useMemo(() => {
     const l = data ?? [];
     return { chains: l.filter((c) => c.kind === 'chain').length, branches: l.filter((c) => c.kind === 'branch').length, singles: l.filter((c) => c.kind === 'single').length };
@@ -53,7 +72,17 @@ export function CustomersPage() {
       }
     >
       <ErrorLine error={error} />
-      <div className="mb-3 flex items-center gap-3">
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+        <div className="flex rounded-lg border border-line bg-card p-0.5">
+          {KIND_FILTERS.map(([k, l]) => (
+            <button key={k} onClick={() => setKind(k)} className={`rounded-md px-3 py-1.5 text-sm ${kind === k ? 'bg-brand text-white' : 'text-muted'}`}>
+              {l}
+              <span className="ml-1 opacity-70">
+                {k === 'all' ? (data?.length ?? '') : k === 'single' ? stats.singles : k === 'chain' ? stats.chains : stats.branches}
+              </span>
+            </button>
+          ))}
+        </div>
         <input className="input max-w-xs" placeholder="Ad, kod, vergi no, şehir…" value={q} onChange={(e) => setQ(e.target.value)} />
         <label className="flex items-center gap-2 text-sm text-muted">
           <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> Pasifleri göster
@@ -75,7 +104,8 @@ export function CustomersPage() {
             {rows.map(({ c, depth }) => (
               <tr key={c.id} className={`clickable ${c.active ? '' : 'opacity-50'}`} onClick={() => go(`/musteriler/${c.id}`)}>
                 <td className={depth ? 'pl-9' : ''}>
-                  <div className={depth ? '' : 'font-semibold'}>
+                  {kind === 'branch' && c.parentName && <div className="text-xs text-muted">{c.parentName}</div>}
+                  <div className={depth || kind === 'branch' ? '' : 'font-semibold'}>
                     {depth ? '└ ' : ''}
                     {c.name}
                   </div>
@@ -257,7 +287,7 @@ export function CustomerEditor({ initial, chains, onClose, onSaved }: { initial:
   );
 }
 
-type Tab = 'info' | 'orders' | 'statement' | 'prices' | 'promo';
+type Tab = 'info' | 'branches' | 'orders' | 'statement' | 'prices' | 'promo';
 
 export function CustomerPage({ id }: { id: number }) {
   const { data: c, error, reload } = useLoad(() => api.customer(id), [id]);
@@ -271,7 +301,8 @@ export function CustomerPage({ id }: { id: number }) {
   if (!c) return <Page title="…">{<ErrorLine error={error} />}</Page>;
   const billable = c.billable;
   const tabs: [Tab, string][] = [
-    ['info', c.kind === 'chain' ? `Bilgiler ve şubeler (${c.branches.length})` : 'Bilgiler'],
+    ['info', 'Bilgiler'],
+    ...(c.kind === 'chain' ? ([['branches', `Şubeler (${c.branches.length})`]] as [Tab, string][]) : []),
     ['orders', 'Siparişler'],
     ...(billable ? ([['statement', 'Cari ekstre']] as [Tab, string][]) : []),
     ...(c.kind !== 'branch' ? ([['prices', 'Özel fiyatlar']] as [Tab, string][]) : []),
@@ -327,7 +358,7 @@ export function CustomerPage({ id }: { id: number }) {
       )}
       <Tabs value={tab} onChange={setTab} items={tabs} />
       {tab === 'info' && (
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid gap-4 lg:grid-cols-3">
           <div className="card p-4 text-sm">
             <h3 className="mb-2 font-semibold">İletişim</h3>
             <Info k="Kod" v={c.code} />
@@ -338,7 +369,21 @@ export function CustomerPage({ id }: { id: number }) {
             {c.note && <Info k="Not" v={c.note} />}
           </div>
           {c.kind === 'chain' && (
-            <div className="card col-span-2 overflow-hidden">
+            <button className="card p-4 text-left text-sm hover:border-brand" onClick={() => setTab('branches')}>
+              <h3 className="mb-1 font-semibold">Şubeler</h3>
+              <div className="text-2xl font-semibold">{c.branches.filter((b) => b.active).length}</div>
+              <div className="text-muted">
+                aktif şube{c.branches.some((b) => !b.active) ? ` · ${c.branches.filter((b) => !b.active).length} pasif` : ''} ·{' '}
+                {c.branches.filter((b) => b.billTo === 'self').length} franchise
+              </div>
+              <div className="mt-2 text-brand">Şubeleri gör ›</div>
+            </button>
+          )}
+        </div>
+      )}
+      {tab === 'branches' && c.kind === 'chain' && (
+        <div>
+          <div className="card overflow-x-auto">
               <table className="tbl">
                 <thead>
                   <tr>
@@ -363,8 +408,7 @@ export function CustomerPage({ id }: { id: number }) {
                 </tbody>
               </table>
               {!c.branches.length && <Empty>Şube yok. “+ Şube ekle” ile ekleyin.</Empty>}
-            </div>
-          )}
+          </div>
         </div>
       )}
       {tab === 'orders' && <CustomerOrders customerId={c.id} />}
