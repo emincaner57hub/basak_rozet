@@ -62,7 +62,7 @@ export async function createOrder(q: Queryable, b: z.infer<typeof orderSchema>, 
 export async function orderDetail(q: Queryable, id: number) {
   const [o] = await q.query<Row>(
     `SELECT o.id, o.no, o.date, o.customer_id "customerId", c.name "customerName", c.kind "customerKind", ch.name "chainName",
-            o.channel, o.cancelled, o.requested_date "requestedDate", o.customer_ref "customerRef", o.note, o.batch, o.created_at "createdAt",
+            o.channel, o.cancelled, o.requested_date "requestedDate", o.customer_ref "customerRef", o.note, o.batch, o.created_at "createdAt", o.delivered_at "deliveredAt",
             pu.name "portalUser", pu.phone "portalPhone"
      FROM orders o JOIN customers c ON c.id = o.customer_id LEFT JOIN customers ch ON ch.id = c.parent_id
           LEFT JOIN portal_users pu ON pu.id = o.portal_user_id WHERE o.id = $1`,
@@ -85,15 +85,32 @@ export async function orderDetail(q: Queryable, id: number) {
   const shipped = lines.reduce((s, l) => s + Math.min(l.shipped, l.qty), 0);
   return {
     ...o,
-    status: statusOf(o.cancelled as boolean, qty, shipped),
+    status: statusOf(o.cancelled as boolean, qty, shipped, o.deliveredAt as string | null),
     lines: lines.map((l) => ({ ...l, remaining: Math.max(0, l.qty - l.shipped) })),
     dispatches,
     total: lines.reduce((s, l) => s + l.qty * l.unitPrice, 0),
   };
 }
 
-export const statusOf = (cancelled: boolean, qty: number, shipped: number) =>
-  shipped >= qty && qty > 0 ? 'shipped' : cancelled ? (shipped > 0 ? 'closed' : 'cancelled') : shipped > 0 ? 'partial' : 'open';
+export type OrderStatus = 'open' | 'partial' | 'shipped' | 'delivered' | 'closed' | 'cancelled';
+export const ORDER_STATUSES = ['open', 'partial', 'shipped', 'delivered', 'closed', 'cancelled'] as const;
+
+/** Durum satırlardan çıkar; sevk edilmiş ve teslim tarihi girilmiş sipariş "teslim edildi" */
+export const statusOf = (cancelled: boolean, qty: number, shipped: number, deliveredAt: string | null = null): OrderStatus =>
+  deliveredAt && shipped > 0
+    ? 'delivered'
+    : shipped >= qty && qty > 0
+      ? 'shipped'
+      : cancelled
+        ? shipped > 0
+          ? 'closed'
+          : 'cancelled'
+        : shipped > 0
+          ? 'partial'
+          : 'open';
+
+/** Teslim edildi olarak işaretlenebilir: tamamı sevk edilmiş ya da kalanı kapatılmış (sevk edilmiş kısmı olan) */
+export const DELIVERABLE: OrderStatus[] = ['shipped', 'closed'];
 
 // ---------- Excel ----------
 const norm = (s: unknown) =>
@@ -283,27 +300,78 @@ export async function orderTemplate(q: Queryable, chainId: number | null) {
 }
 
 export function registerOrders(app: FastifyInstance, { db, currentUser, now }: { db: Db; currentUser: (r: object) => { id: number } | null; now: () => Date }) {
-  app.get('/api/orders', async (req) => {
-    const q = z
-      .object({ status: z.enum(['open', 'all', 'portal']).default('open'), customerId: z.coerce.number().int().optional(), q: z.string().max(80).optional() })
-      .parse(req.query);
-    const rows = await db.query<Row & { cancelled: boolean; qty: number; shipped: number }>(
-      `SELECT o.id, o.no, o.date, o.channel, o.cancelled, o.requested_date "requestedDate", o.customer_ref "customerRef", o.batch,
+  const listSchema = z.object({
+    /** pending: bekleyenler (açık + kısmi sevk); all: tümü; diğerleri tek durum */
+    status: z.enum(['pending', 'all', ...ORDER_STATUSES]).default('pending'),
+    /** Yalnız müşterinin portaldan verdiği siparişler */
+    portal: z.enum(['1']).optional(),
+    customerId: z.coerce.number().int().optional(),
+    q: z.string().max(80).optional(),
+    from: daySchema.optional(),
+    to: daySchema.optional(),
+  });
+  async function listOrders(f: z.infer<typeof listSchema>) {
+    const rows = await db.query<Row & { cancelled: boolean; qty: number; shipped: number; total: number; shippedTotal: number; deliveredAt: string | null }>(
+      `SELECT o.id, o.no, o.date, o.channel, o.cancelled, o.requested_date "requestedDate", o.customer_ref "customerRef", o.batch, o.delivered_at "deliveredAt",
               c.id "customerId", c.name "customerName", ch.name "chainName", pu.name "portalUser",
               (o.portal_user_id IS NOT NULL AND o.seen_at IS NULL) "isNew",
               (SELECT COALESCE(SUM(ol.qty),0) FROM order_lines ol WHERE ol.order_id = o.id) qty,
               (SELECT COALESCE(SUM(LEAST(ol.qty, ${SHIPPED('ol')})),0) FROM order_lines ol WHERE ol.order_id = o.id) shipped,
-              (SELECT COALESCE(SUM(ol.qty * ol.unit_price),0) FROM order_lines ol WHERE ol.order_id = o.id) total
+              (SELECT COALESCE(SUM(ol.qty * ol.unit_price),0) FROM order_lines ol WHERE ol.order_id = o.id) total,
+              (SELECT COALESCE(SUM(LEAST(ol.qty, ${SHIPPED('ol')}) * ol.unit_price),0) FROM order_lines ol WHERE ol.order_id = o.id) "shippedTotal"
        FROM orders o JOIN customers c ON c.id = o.customer_id LEFT JOIN customers ch ON ch.id = c.parent_id
             LEFT JOIN portal_users pu ON pu.id = o.portal_user_id
        WHERE ($1::int IS NULL OR o.customer_id = $1 OR c.parent_id = $1)
          AND ($3::bool IS NOT TRUE OR o.portal_user_id IS NOT NULL)
+         AND ($4::date IS NULL OR o.date >= $4) AND ($5::date IS NULL OR o.date <= $5)
          AND ($2::text IS NULL OR o.no ILIKE '%' || $2 || '%' OR c.name ILIKE '%' || $2 || '%' OR ch.name ILIKE '%' || $2 || '%' OR o.customer_ref ILIKE '%' || $2 || '%')
-       ORDER BY o.date DESC, o.id DESC LIMIT 500`,
-      [q.customerId ?? null, q.q?.trim() || null, q.status === 'portal'],
+       ORDER BY o.date DESC, o.id DESC`,
+      [f.customerId ?? null, f.q?.trim() || null, f.portal === '1', f.from ?? null, f.to ?? null],
     );
-    const out = rows.map((r) => ({ ...r, status: statusOf(r.cancelled, r.qty, r.shipped) }));
-    return q.status === 'open' ? out.filter((r) => r.status === 'open' || r.status === 'partial') : out;
+    const out = rows.map(({ shippedTotal, ...r }) => {
+      const status = statusOf(r.cancelled, r.qty, r.shipped, r.deliveredAt);
+      // Satış: kapatılan / iptal edilen siparişte yalnız sevk edilen kısım (hiç sevk yoksa 0)
+      const sale = r.cancelled ? { qty: r.shipped, total: shippedTotal } : { qty: r.qty, total: r.total };
+      return { ...r, status, deliverable: DELIVERABLE.includes(status), sale };
+    });
+    if (f.status === 'all') return out;
+    if (f.status === 'pending') return out.filter((r) => r.status === 'open' || r.status === 'partial');
+    return out.filter((r) => r.status === f.status);
+  }
+
+  app.get('/api/orders', async (req) => (await listOrders(listSchema.parse(req.query))).slice(0, 500).map(({ sale: _s, ...r }) => r));
+
+  /** Süzgeçteki tüm siparişlerin toplamı (listeden bağımsız, sınırsız): adet ve satış (KDV hariç) */
+  app.get('/api/orders/summary', async (req) => {
+    const rows = await listOrders(listSchema.parse(req.query));
+    return {
+      count: rows.length,
+      qty: rows.reduce((s, r) => s + r.sale.qty, 0),
+      total: rows.reduce((s, r) => s + r.sale.total, 0),
+    };
+  });
+
+  /** Seçilen sevk edilmiş siparişleri "teslim edildi" yapar */
+  app.post('/api/orders/deliver', async (req) => {
+    const b = z.object({ ids: z.array(z.number().int().positive()).min(1, 'Sipariş seçin').max(500), date: daySchema.optional() }).parse(req.body);
+    const date = b.date ?? todayTr(now());
+    return db.tx(async (q) => {
+      const done: string[] = [];
+      for (const id of [...new Set(b.ids)]) {
+        const d = await orderDetail(q, id);
+        const no = (d as Row).no as string;
+        if (d.status === 'delivered') continue;
+        if (!DELIVERABLE.includes(d.status)) throw fail(400, `${no} henüz sevk edilmedi; yalnız sevk edilmiş sipariş teslim edilebilir`);
+        await q.query('UPDATE orders SET delivered_at = $1 WHERE id = $2', [date, id]);
+        done.push(no);
+      }
+      return { count: done.length, orders: done };
+    });
+  });
+  app.post('/api/orders/:id/undeliver', async (req) => {
+    const r = await db.query('UPDATE orders SET delivered_at = NULL WHERE id = $1 RETURNING id', [idParam(req.params)]);
+    if (!r.length) throw fail(404, 'Sipariş bulunamadı');
+    return { ok: true };
   });
 
   /** Portaldan gelip henüz açılmamış siparişler (menü rozeti, panel) */
