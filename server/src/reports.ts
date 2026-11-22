@@ -28,53 +28,6 @@ export function registerReports(app: FastifyInstance, { db, now }: { db: Db; now
     return { from: r.from ?? `${today.slice(0, 7)}-01`, to: r.to ?? today };
   };
 
-  app.get('/api/dashboard', async () => {
-    const today = todayTr(now());
-    const monthStart = `${today.slice(0, 7)}-01`;
-    const [orders] = await db.query<{ count: number; units: number }>(
-      `SELECT COUNT(DISTINCT o.id) count, COALESCE(SUM(GREATEST(ol.qty - COALESCE((SELECT SUM(dl.qty) FROM dispatch_lines dl JOIN dispatches d ON d.id = dl.dispatch_id
-                WHERE dl.order_line_id = ol.id AND NOT d.cancelled), 0), 0)), 0) units
-       FROM orders o JOIN order_lines ol ON ol.order_id = o.id
-       WHERE NOT o.cancelled AND ol.qty > COALESCE((SELECT SUM(dl.qty) FROM dispatch_lines dl JOIN dispatches d ON d.id = dl.dispatch_id WHERE dl.order_line_id = ol.id AND NOT d.cancelled), 0)`,
-    );
-    const [pending] = await db.query<{ customers: number; dispatches: number; net: number }>(
-      `SELECT COUNT(DISTINCT d.bill_to_id) customers, COUNT(DISTINCT d.id) dispatches, COALESCE(SUM(dl.qty * dl.unit_price),0) net
-       FROM dispatches d JOIN dispatch_lines dl ON dl.dispatch_id = d.id WHERE d.invoice_id IS NULL AND NOT d.cancelled`,
-    );
-    const [month] = await db.query<{ revenue: number; cogs: number; promo: number }>(
-      `SELECT COALESCE(SUM(dl.qty * dl.unit_price) FILTER (WHERE NOT dl.is_promo),0) revenue,
-              COALESCE(SUM(dl.qty * m.unit_cost) FILTER (WHERE NOT dl.is_promo),0) cogs,
-              COALESCE(SUM(dl.qty * m.unit_cost) FILTER (WHERE dl.is_promo),0) promo ${LINES}`,
-      [monthStart, today],
-    );
-    const [stock] = await db.query<{ value: number; low: number }>(
-      `SELECT COALESCE(SUM(GREATEST(x.on_hand,0) * COALESCE(x.avg_cost,0)),0) value, COUNT(*) FILTER (WHERE x.min_qty IS NOT NULL AND x.on_hand <= x.min_qty) low
-       FROM (SELECT p.avg_cost, p.min_qty, COALESCE((SELECT SUM(qty) FROM stock_moves WHERE product_id = p.id),0) on_hand FROM products p WHERE p.active) x`,
-    );
-    const [inTransit] = await db.query<{ count: number }>(`SELECT COUNT(*) count FROM lots WHERE status = 'ordered'`);
-    const receivables = await receivablesReport(today);
-    const recentOrders = await db.query(
-      `SELECT o.id, o.no, o.date, o.channel, c.name "customerName", ch.name "chainName",
-              (SELECT COALESCE(SUM(qty * unit_price),0) FROM order_lines WHERE order_id = o.id) total
-       FROM orders o JOIN customers c ON c.id = o.customer_id LEFT JOIN customers ch ON ch.id = c.parent_id
-       WHERE NOT o.cancelled ORDER BY o.id DESC LIMIT 8`,
-    );
-    return {
-      today,
-      openOrders: orders,
-      pendingInvoice: pending,
-      month: { ...month, gross: month.revenue - month.cogs },
-      stock,
-      lotsInTransit: inTransit.count,
-      receivables: {
-        total: receivables.reduce((s, r) => s + r.balance, 0),
-        overdue: receivables.reduce((s, r) => s + r.overdue, 0),
-        top: receivables.filter((r) => r.overdue > 0).slice(0, 6),
-      },
-      recentOrders,
-    };
-  });
-
   /** Satış: müşteri / zincir / ürün / ay bazında ciro, maliyet, brüt kâr */
   app.get('/api/reports/sales', async (req) => {
     const { from, to } = range(req.query);
