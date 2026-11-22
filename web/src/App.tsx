@@ -12,7 +12,7 @@ import { ProductsPage, ProductPage } from './pages/Products';
 import { LotsPage, LotPage } from './pages/Lots';
 import { ReportsPage } from './pages/Reports';
 import { SettingsPage } from './pages/Settings';
-import { PrintDispatch, PrintInvoice } from './pages/Print';
+import { PrintDispatch, PrintInvoice, PrintOrders } from './pages/Print';
 import { EInvoicesPage, SuppliersCariPage, SupplierCariPage } from './pages/Cari';
 import PortalApp from './pages/Portal';
 
@@ -37,6 +37,7 @@ function Routes() {
   let r: ReturnType<typeof match>;
   if ((r = m('/yazdir/irsaliye/:id'))) return <PrintDispatch id={Number(r.id)} />;
   if ((r = m('/yazdir/fatura/:id'))) return <PrintInvoice id={Number(r.id)} />;
+  if (m('/yazdir/siparisler')) return <PrintOrders />;
   let page: ReactNode = <Dashboard />;
   if (m('/siparisler')) page = <OrdersPage />;
   else if (m('/siparisler/yeni')) page = <OrderNewPage />;

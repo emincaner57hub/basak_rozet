@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, CHANNEL_LABEL, ORDER_STATUS, type CatalogItem, type Channel, type Customer, type ImportPreview, type OrderDetail, type OrderFilter, type OrderSummary } from '../api';
+import { api, CHANNEL_LABEL, ORDER_STATUS, orderQs, type CatalogItem, type Channel, type Customer, type ImportPreview, type OrderDetail, type OrderFilter, type OrderSummary } from '../api';
 import { Link, queryParam, useNav } from '../router';
 import { Badge, Confirm, Empty, ErrorLine, Field, IntInput, MoneyInput, Page, SearchSelect, Stat, fileToBase64, useLoad, useToast } from '../ui';
 import { fmtNum, formatTL, today, trDate } from '../money';
@@ -208,6 +208,12 @@ export function OrdersPage() {
           </>
         ) : (
           <>
+            <a className="btn" href={api.ordersExcelUrl(filter)} title="Ekrandaki süzgeçle Excel dosyası indirir">
+              Excel'e aktar
+            </a>
+            <a className="btn" href={`/yazdir/siparisler${orderQs(filter)}`} target="_blank" rel="noreferrer" title="Ekrandaki süzgeçle yazdırılabilir / PDF olarak kaydedilebilir liste">
+              PDF
+            </a>
             <button className="btn" onClick={() => setSelecting(true)}>
               Teslim et
             </button>

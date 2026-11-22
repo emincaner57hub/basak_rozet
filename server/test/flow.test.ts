@@ -175,6 +175,19 @@ describe('Başak Rozet akışı', () => {
     expect(await req('GET', '/api/orders/summary?status=all&from=2026-10-01&to=2026-10-31')).toEqual({ count: 4, qty: 20 + 30 + 0 + 20, total: 70 * 6000 });
     expect(await req('GET', '/api/orders/summary?status=delivered')).toEqual({ count: 2, qty: 30, total: 30 * 6000 });
 
+    // Excel dökümü: aynı süzgeç, toplam satırı
+    const x = await app.inject({ method: 'GET', url: '/api/orders/export.xlsx?status=all&from=2026-10-01&to=2026-10-31', headers: { cookie } });
+    expect(x.statusCode).toBe(200);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(x.rawPayload as unknown as ArrayBuffer);
+    const ws = wb.worksheets[0];
+    expect(ws.getRow(4).getCell(1).value).toBe('Sipariş no');
+    expect(ws.getRow(5).getCell(1).value).toBe(o5.no);
+    expect(ws.getRow(5).getCell(11).value).toBe('Teslim edildi');
+    const last = ws.getRow(ws.rowCount);
+    expect([last.getCell(8).value, last.getCell(10).value]).toEqual([70, 4200]);
+    expect((await req('GET', '/api/orders?status=all&all=1')).length).toBe(5);
+
     await req('POST', `/api/orders/${o1.id}/undeliver`, {});
     expect((await req('GET', `/api/orders/${o1.id}`)).status).toBe('shipped');
   });

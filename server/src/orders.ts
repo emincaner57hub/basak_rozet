@@ -299,6 +299,58 @@ export async function orderTemplate(q: Queryable, chainId: number | null) {
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
+const STATUS_LABEL: Record<OrderStatus, string> = {
+  open: 'Açık',
+  partial: 'Kısmi sevk',
+  shipped: 'Sevk edildi',
+  delivered: 'Teslim edildi',
+  closed: 'Kapandı',
+  cancelled: 'İptal',
+};
+const FILTER_LABEL: Record<string, string> = { pending: 'Bekleyenler (açık + kısmi)', all: 'Tümü', ...STATUS_LABEL };
+const CHANNEL_LABEL: Record<string, string> = { panel: 'Panel', phone: 'Telefon', whatsapp: 'WhatsApp', email: 'E-posta', excel: 'Excel', portal: 'Portal' };
+const trDay = (iso: string | null | undefined) => (iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}` : '');
+
+type ListedOrder = Row & {
+  no: string; date: string; requestedDate: string | null; deliveredAt: string | null; chainName: string | null; customerName: string;
+  channel: string; customerRef: string | null; qty: number; shipped: number; total: number; status: OrderStatus; sale: { qty: number; total: number };
+};
+
+/** Sipariş listesi Excel'i: başlıkta süzgeç, satırlar, en altta toplam (satış: iptal / kapatılan kısım hariç) */
+export async function ordersWorkbook(rows: ListedOrder[], f: { status: string; from?: string; to?: string; portal?: string; q?: string }) {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Siparişler', { views: [{ state: 'frozen', ySplit: 4 }], pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 } });
+  const range = f.from || f.to ? `${trDay(f.from) || '…'} – ${trDay(f.to) || '…'}` : 'Tüm tarihler';
+  ws.addRow(['Siparişler']).font = { bold: true, size: 14 };
+  ws.addRow([[range, `Durum: ${FILTER_LABEL[f.status] ?? f.status}`, f.portal ? 'Yalnız müşteriden gelen' : null, f.q ? `Arama: ${f.q}` : null].filter(Boolean).join(' · ')]);
+  ws.addRow([]);
+  const head = ws.addRow(['Sipariş no', 'Tarih', 'Zincir', 'Müşteri', 'Kanal', 'Müşteri ref', 'İstenen teslim', 'Adet', 'Sevk', 'Tutar (KDV hariç)', 'Durum', 'Teslim tarihi']);
+  head.font = { bold: true };
+  head.eachCell((c) => {
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDEBFA' } };
+    c.border = { bottom: { style: 'thin' } };
+  });
+  const asDate = (iso: string | null) => (iso ? new Date(iso + 'T00:00:00Z') : null);
+  for (const o of rows) {
+    ws.addRow([
+      o.no, asDate(o.date), o.chainName ?? '', o.customerName, CHANNEL_LABEL[o.channel] ?? o.channel, o.customerRef ?? '', asDate(o.requestedDate),
+      o.qty, o.shipped, o.total / 100, STATUS_LABEL[o.status], asDate(o.deliveredAt),
+    ]);
+  }
+  const sum = ws.addRow([
+    `Toplam: ${rows.length} sipariş`, null, null, null, null, null, 'Satış (iptal / kapatılan hariç)',
+    rows.reduce((s, o) => s + o.sale.qty, 0), rows.reduce((s, o) => s + o.shipped, 0), rows.reduce((s, o) => s + o.sale.total, 0) / 100,
+  ]);
+  sum.font = { bold: true };
+  sum.eachCell((c) => (c.border = { top: { style: 'thin' } }));
+  const widths = [17, 11, 18, 24, 11, 16, 13, 9, 9, 17, 14, 13];
+  ws.columns.forEach((c, i) => (c.width = widths[i]));
+  for (const col of [2, 7, 12]) ws.getColumn(col).numFmt = 'dd.mm.yyyy';
+  for (const col of [8, 9]) ws.getColumn(col).numFmt = '#,##0';
+  ws.getColumn(10).numFmt = '#,##0.00 "₺"';
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
 export function registerOrders(app: FastifyInstance, { db, currentUser, now }: { db: Db; currentUser: (r: object) => { id: number } | null; now: () => Date }) {
   const listSchema = z.object({
     /** pending: bekleyenler (açık + kısmi sevk); all: tümü; diğerleri tek durum */
@@ -309,9 +361,11 @@ export function registerOrders(app: FastifyInstance, { db, currentUser, now }: {
     q: z.string().max(80).optional(),
     from: daySchema.optional(),
     to: daySchema.optional(),
+    /** Liste sınırı (500) olmadan; çıktı / PDF için */
+    all: z.enum(['1']).optional(),
   });
-  async function listOrders(f: z.infer<typeof listSchema>) {
-    const rows = await db.query<Row & { cancelled: boolean; qty: number; shipped: number; total: number; shippedTotal: number; deliveredAt: string | null }>(
+  async function listOrders(f: z.infer<typeof listSchema>): Promise<(ListedOrder & { deliverable: boolean })[]> {
+    const rows = await db.query<ListedOrder & { cancelled: boolean; shippedTotal: number }>(
       `SELECT o.id, o.no, o.date, o.channel, o.cancelled, o.requested_date "requestedDate", o.customer_ref "customerRef", o.batch, o.delivered_at "deliveredAt",
               c.id "customerId", c.name "customerName", ch.name "chainName", pu.name "portalUser",
               (o.portal_user_id IS NOT NULL AND o.seen_at IS NULL) "isNew",
@@ -339,7 +393,22 @@ export function registerOrders(app: FastifyInstance, { db, currentUser, now }: {
     return out.filter((r) => r.status === f.status);
   }
 
-  app.get('/api/orders', async (req) => (await listOrders(listSchema.parse(req.query))).slice(0, 500).map(({ sale: _s, ...r }) => r));
+  app.get('/api/orders', async (req) => {
+    const f = listSchema.parse(req.query);
+    const rows = await listOrders(f);
+    return (f.all ? rows : rows.slice(0, 500)).map(({ sale: _s, ...r }) => r);
+  });
+
+  /** Süzgeçteki siparişlerin Excel dökümü (ekrandaki liste + toplam satırı) */
+  app.get('/api/orders/export.xlsx', async (req, reply) => {
+    const f = listSchema.parse(req.query);
+    const rows = await listOrders(f);
+    const buf = await ordersWorkbook(rows, f);
+    const stamp = [f.from, f.to].filter(Boolean).join('_') || todayTr(now());
+    reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    reply.header('content-disposition', `attachment; filename="siparisler-${stamp}.xlsx"`);
+    return reply.send(buf);
+  });
 
   /** Süzgeçteki tüm siparişlerin toplamı (listeden bağımsız, sınırsız): adet ve satış (KDV hariç) */
   app.get('/api/orders/summary', async (req) => {
