@@ -18,6 +18,9 @@ export interface Customer {
   phone: string | null;
   email: string | null;
   paymentDays: number;
+  /** İndirim %: satışta fiyata uygulanır; 0 = indirim yok (şubede 0 ise zincirin indirimi) */
+  discount: number;
+  parentDiscount: number | null;
   openingBalance: number;
   openingDate: string | null;
   note: string | null;
@@ -26,7 +29,7 @@ export interface Customer {
   balance: number | null;
   billable: boolean;
 }
-export type CustomerInput = Omit<Customer, 'id' | 'parentName' | 'branchCount' | 'balance' | 'billable'>;
+export type CustomerInput = Omit<Customer, 'id' | 'parentName' | 'parentDiscount' | 'branchCount' | 'balance' | 'billable'>;
 
 export interface Product {
   id: number;
@@ -61,7 +64,12 @@ export interface CatalogItem {
   unit: string;
   vatRate: number;
   listPrice: number | null;
+  /** İndirimsiz fiyat (özel fiyat, yoksa liste) */
+  basePrice: number | null;
+  /** Müşteriye satış fiyatı: basePrice − indirim */
   price: number | null;
+  /** Uygulanan müşteri indirimi % (0 = yok) */
+  discount: number;
   special: boolean;
   onHand: number;
   chainId: number | null;

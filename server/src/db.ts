@@ -441,6 +441,10 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE portal_users ADD COLUMN see_prices BOOLEAN NOT NULL DEFAULT TRUE;
   `,
+  // 7 — Müşteri indirimi (%): satışta fiyata uygulanır; 0 = indirim yok. Şubede 0 ise zincirin indirimi geçerli.
+  `
+  ALTER TABLE customers ADD COLUMN discount NUMERIC(5,2) NOT NULL DEFAULT 0 CHECK (discount >= 0 AND discount < 100);
+  `,
 ];
 
 async function migrate(db: Db, MIGRATIONS: string[]) {

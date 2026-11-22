@@ -157,6 +157,7 @@ export function CustomerEditor({ initial, chains, onClose, onSaved }: { initial:
     phone: initial.phone ?? null,
     email: initial.email ?? null,
     paymentDays: initial.paymentDays ?? 30,
+    discount: initial.discount ?? 0,
     openingBalance: initial.openingBalance ?? 0,
     openingDate: initial.openingDate ?? null,
     note: initial.note ?? null,
@@ -259,6 +260,18 @@ export function CustomerEditor({ initial, chains, onClose, onSaved }: { initial:
             </Field>
           </>
         )}
+        <Field
+          label="İndirim %"
+          hint={
+            f.kind === 'branch'
+              ? '0 ise zincirin indirimi uygulanır'
+              : f.kind === 'chain'
+                ? 'Şubelere de uygulanır (şubede ayrı girilmediyse)'
+                : '0 = indirim yok'
+          }
+        >
+          <PctInput value={f.discount} onChange={(v) => set('discount', v)} />
+        </Field>
         <Field label={f.kind === 'branch' ? 'Sevk adresi' : 'Adres'} className="col-span-2">
           {txt('address')}
         </Field>
@@ -362,6 +375,7 @@ export function CustomerPage({ id }: { id: number }) {
           <div className="card p-4 text-sm">
             <h3 className="mb-2 font-semibold">İletişim</h3>
             <Info k="Kod" v={c.code} />
+            <Info k="İndirim" v={discountText(c)} />
             <Info k="Yetkili" v={c.contactName} />
             <Info k="Telefon" v={c.phone} />
             <Info k="E-posta" v={c.email} />
@@ -629,5 +643,36 @@ function PromoView({ customerId, isChain }: { customerId: number; isChain: boole
         </button>
       </div>
     </div>
+  );
+}
+
+const pct = (n: number) => `%${n.toLocaleString('tr-TR', { maximumFractionDigits: 2 })}`;
+
+/** Kartta gösterilen indirim: kendi indirimi; şubede yoksa zincirinki */
+function discountText(c: Customer) {
+  if (c.discount > 0) return pct(c.discount);
+  if (c.kind === 'branch' && c.parentDiscount) return `${pct(c.parentDiscount)} (zincirden)`;
+  return 'Yok';
+}
+
+/** Yüzde girişi (0–99,99): virgül ya da nokta ondalık ayırıcı */
+function PctInput({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const [text, setText] = useState(value ? String(value).replace('.', ',') : '');
+  const parse = (t: string) => (t.trim() === '' ? 0 : Number(t.trim().replace(',', '.')));
+  const v = parse(text);
+  const bad = !Number.isFinite(v) || v < 0 || v >= 100;
+  return (
+    <input
+      value={text}
+      inputMode="decimal"
+      placeholder="0"
+      aria-label="İndirim yüzdesi"
+      onChange={(e) => {
+        setText(e.target.value);
+        const n = parse(e.target.value);
+        if (Number.isFinite(n) && n >= 0 && n < 100) onChange(Math.round(n * 100) / 100);
+      }}
+      className={`input tabular text-right ${bad ? 'border-bad' : ''}`}
+    />
   );
 }
