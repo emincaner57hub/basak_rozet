@@ -11,6 +11,7 @@ import { registerLots } from './lots.js';
 import { registerOrders } from './orders.js';
 import { registerDispatches } from './dispatches.js';
 import { registerInvoices } from './invoices.js';
+import { registerDashboard } from './dashboard.js';
 import { registerReports } from './reports.js';
 import { registerSettings } from './settings.js';
 import { registerCari } from './cari.js';
@@ -56,6 +57,7 @@ export function buildApp({ db, now = () => new Date(), webDist, sessionSecret, s
     registerDispatches(app, { db });
     registerInvoices(app, { db, now });
     registerReports(app, { db, now });
+    registerDashboard(app, { db, now });
     registerSettings(app, { db });
     registerCari(app, { db, edmFetcher });
     registerPortal(app, { db, secret: sessionSecret, now, secureCookies });

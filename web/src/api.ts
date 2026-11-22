@@ -436,15 +436,46 @@ export interface PromoExpense {
   customerName: string;
 }
 
+/** Genel bakış (panel): satışlar sevk tarihine göre */
+export interface DashPoint {
+  id: number;
+  name: string;
+  chainName: string | null;
+}
 export interface Dashboard {
   today: string;
-  openOrders: { count: number; units: number };
-  pendingInvoice: { customers: number; dispatches: number; net: number };
-  month: { revenue: number; cogs: number; promo: number; gross: number };
-  stock: { value: number; low: number };
-  lotsInTransit: number;
-  receivables: { total: number; overdue: number; top: Receivable[] };
-  recentOrders: { id: number; no: string; date: string; channel: Channel; customerName: string; chainName: string | null; total: number }[];
+  from: string;
+  to: string;
+  kpi: {
+    revenue: { value: number; change: number | null };
+    qty: { value: number; change: number | null };
+    net: { value: number; margin: number | null };
+    points: { value: number; new: number };
+    brands: { value: number; new: number };
+  };
+  trend: { month: string; revenue: number; qty: number }[];
+  target: { monthly: number; period: number; actual: number };
+  actions: {
+    silent: { days: number; items: (DashPoint & { lastOrder: string })[] };
+    newPoints: (DashPoint & { first: string })[];
+    runningOut: { days: number; items: DashStock[] };
+    dueThisWeek: { id: number; name: string; amount: number; dueDate: string }[];
+  };
+  topBranch: (DashPoint & { qty: number; total: number; orders: number }) | null;
+  repeat: { buyers: number; repeaters: number; rate: number | null };
+  perPointMonthly: number | null;
+  topProducts: { id: number; code: string; name: string; category: string | null; image: string | null; qty: number; revenue: number }[];
+  brands: { id: number | null; name: string; kind: string; points: number; qty: number; revenue: number; net: number }[];
+  stock: DashStock[];
+}
+export interface DashStock {
+  id: number;
+  code: string;
+  name: string;
+  image: string | null;
+  onHand: number;
+  sold90: number;
+  daysLeft: number | null;
 }
 export interface Receivable {
   id: number;
@@ -560,7 +591,8 @@ export const api = {
     req(id ? 'PUT' : 'POST', id ? `/api/users/${id}` : '/api/users', b),
   settings: () => req<Settings>('GET', '/api/settings'),
   saveSettings: (b: Partial<Settings>) => req('PUT', '/api/settings', b),
-  dashboard: () => req<Dashboard>('GET', '/api/dashboard'),
+  dashboard: (o: { from?: string; to?: string } = {}) => req<Dashboard>('GET', `/api/dashboard${qs(o)}`),
+  setDashboardTarget: (monthly: number) => req('PUT', '/api/dashboard/target', { monthly }),
 
   customers: (o: { q?: string; all?: boolean } = {}) => req<Customer[]>('GET', `/api/customers${qs({ q: o.q, all: o.all ? '1' : null })}`),
   customer: (id: number) => req<Customer & { branches: Customer[] }>('GET', `/api/customers/${id}`),

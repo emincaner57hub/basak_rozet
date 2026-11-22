@@ -192,6 +192,58 @@ describe('Başak Rozet akışı', () => {
     expect((await req('GET', `/api/orders/${o1.id}`)).status).toBe('shipped');
   });
 
+  it('panel: dönem satışı, geçen aya göre, katkı, aksiyonlar, en çok satanlar, stok günü, hedef', async () => {
+    const s = await setup();
+    await req('POST', `/api/products/${s.a.id}/adjust`, { date: '2026-08-01', qty: 1000, unitCost: 2000 });
+    await req('POST', `/api/products/${s.b.id}/adjust`, { date: '2026-08-01', qty: 1000, unitCost: 1000 });
+    await req('POST', `/api/products/${s.stand.id}/adjust`, { date: '2026-08-01', qty: 10, unitCost: 5000 });
+    const sell = async (customerId: number, date: string, lines: { productId: number; qty: number }[], promo?: number) => {
+      const o = await req('POST', '/api/orders', { customerId, date, lines });
+      const od = await req('GET', `/api/orders/${o.id}`);
+      await req('POST', '/api/dispatches', {
+        date, customerId, orderId: o.id,
+        lines: [...od.lines.map((l: any) => ({ productId: l.productId, qty: l.qty, orderLineId: l.id })), ...(promo ? [{ productId: s.stand.id, qty: promo }] : [])],
+      });
+      return o;
+    };
+    // Eylül: Moda 10 × R-1 (geçen ay karşılaştırması 1–22 Eylül)
+    await sell(s.moda.id, '2026-09-05', [{ productId: s.a.id, qty: 10 }]);
+    // Ekim: Moda 20 × R-1 + 1 stand, İzmir 30 × R-2 (ilk kez), Limon 10 × R-1
+    await sell(s.moda.id, '2026-10-03', [{ productId: s.a.id, qty: 20 }], 1);
+    await sell(s.izmir.id, '2026-10-10', [{ productId: s.b.id, qty: 30 }]);
+    const lim = await sell(s.solo.id, '2026-10-20', [{ productId: s.a.id, qty: 10 }]);
+    // Limon'a fatura: vade 7 gün → bu hafta
+    const disp = (await req('GET', `/api/orders/${lim.id}`)).dispatches[0];
+    await req('POST', '/api/invoices', { customerId: s.solo.id, date: '2026-10-20', dispatchIds: [disp.id] });
+    await req('PUT', '/api/dashboard/target', { monthly: 500000 });
+
+    const d = await req('GET', '/api/dashboard');
+    expect([d.from, d.to]).toEqual(['2026-10-01', '2026-10-22']);
+    const revenue = 30 * 6000 + 30 * 5000;
+    expect(d.kpi.revenue).toEqual({ value: revenue, change: revenue / 60000 - 1 });
+    expect(d.kpi.qty).toEqual({ value: 60, change: 5 });
+    // katkı: satış − maliyet (30×2000 + 30×1000) − stand (5000)
+    expect(d.kpi.net.value).toBe(revenue - 90000 - 5000);
+    expect(d.kpi.points).toEqual({ value: 3, new: 2 }); // İzmir ve Limon ilk kez
+    expect(d.kpi.brands).toEqual({ value: 2, new: 1 }); // Kahve Durağı (Eylül'de vardı) + Limon
+    expect(d.trend.map((t: any) => t.month)).toEqual(['2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10']);
+    expect(d.trend.at(-1)).toEqual({ month: '2026-10', revenue, qty: 60 });
+    expect(d.target).toEqual({ monthly: 500000, period: 500000, actual: revenue });
+    // Moda son siparişi 3 Ekim → 14 günden eski
+    expect(d.actions.silent.items.map((x: any) => x.name)).toEqual(['Moda']);
+    expect(d.actions.newPoints.map((x: any) => x.name).sort()).toEqual(['Limon Kafe', 'İzmir']);
+    expect(d.actions.dueThisWeek).toEqual([expect.objectContaining({ name: 'Limon Kafe', dueDate: '2026-10-27' })]);
+    expect(d.topBranch).toMatchObject({ name: 'İzmir', qty: 30 });
+    expect(d.topProducts.map((p: any) => [p.code, p.qty]).sort()).toEqual([['R-1', 30], ['R-2', 30]]);
+    expect(d.brands.map((b: any) => [b.name, b.points, b.qty])).toEqual([['Kahve Durağı', 2, 50], ['Limon Kafe', 1, 10]]);
+    // R-1: stok 1000 − 40 = 960, 90 günde 40 satış → 2160 gün
+    expect(d.stock.find((p: any) => p.code === 'R-1')).toMatchObject({ onHand: 960, daysLeft: 2160 });
+    expect(d.perPointMonthly).toBe(Math.round(((60 / 3) * 30) / 22));
+    // dönem seçilebilir: Eylül
+    const sep = await req('GET', '/api/dashboard?from=2026-09-01&to=2026-09-30');
+    expect(sep.kpi.revenue.value).toBe(60000);
+  });
+
   it('müşteri ağacı, özel fiyat ve zincire özel ürün', async () => {
     const s = await setup();
     await expect(req('POST', '/api/customers', { name: 'Yetim şube', kind: 'branch' })).rejects.toMatchObject({ status: 400 });
