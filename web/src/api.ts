@@ -149,6 +149,8 @@ export interface OrderListQuery {
   q?: string;
   from?: string;
   to?: string;
+  /** 500 sınırı olmadan (çıktı için) */
+  all?: boolean;
 }
 export type Channel = 'panel' | 'phone' | 'whatsapp' | 'email' | 'excel' | 'portal';
 export interface OrderSummary {
@@ -545,6 +547,9 @@ const qs = (o: Record<string, string | number | null | undefined>) => {
   return p.length ? '?' + p.map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join('&') : '';
 };
 
+/** Sipariş süzgecinin sorgu metni (liste, toplam, Excel ve PDF sayfası aynı süzgeci kullanır) */
+export const orderQs = (o: OrderListQuery) => qs({ ...o, portal: o.portal ? 1 : null, all: o.all ? 1 : null });
+
 export const api = {
   session: () => req<{ user: User | null }>('GET', '/api/session'),
   login: (email: string, password: string) => req<{ user: User }>('POST', '/api/login', { email, password }),
@@ -600,8 +605,9 @@ export const api = {
   unreceiveLot: (id: number) => req('POST', `/api/lots/${id}/unreceive`, {}),
   deleteLot: (id: number) => req('DELETE', `/api/lots/${id}`),
 
-  orders: (o: OrderListQuery = {}) => req<OrderSummary[]>('GET', `/api/orders${qs({ ...o, portal: o.portal ? 1 : null })}`),
-  orderSummary: (o: OrderListQuery = {}) => req<{ count: number; qty: number; total: number }>('GET', `/api/orders/summary${qs({ ...o, portal: o.portal ? 1 : null })}`),
+  orders: (o: OrderListQuery = {}) => req<OrderSummary[]>('GET', `/api/orders${orderQs(o)}`),
+  ordersExcelUrl: (o: OrderListQuery = {}) => `/api/orders/export.xlsx${orderQs(o)}`,
+  orderSummary: (o: OrderListQuery = {}) => req<{ count: number; qty: number; total: number }>('GET', `/api/orders/summary${orderQs(o)}`),
   deliverOrders: (ids: number[]) => req<{ count: number; orders: string[] }>('POST', '/api/orders/deliver', { ids }),
   undeliverOrder: (id: number) => req('POST', `/api/orders/${id}/undeliver`, {}),
   incomingOrders: () => req<{ count: number }>('GET', '/api/orders/incoming'),
