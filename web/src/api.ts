@@ -139,7 +139,17 @@ export interface LotInput {
   costs: { type: CostType; description: string | null; amount: number; supplierId: number | null; date: string | null }[];
 }
 
-export type OrderStatus = 'open' | 'partial' | 'shipped' | 'closed' | 'cancelled';
+export type OrderStatus = 'open' | 'partial' | 'shipped' | 'delivered' | 'closed' | 'cancelled';
+/** Liste süzgeci: pending = bekleyenler (açık + kısmi sevk) */
+export type OrderFilter = 'pending' | 'all' | OrderStatus;
+export interface OrderListQuery {
+  status?: OrderFilter;
+  portal?: boolean;
+  customerId?: number;
+  q?: string;
+  from?: string;
+  to?: string;
+}
 export type Channel = 'panel' | 'phone' | 'whatsapp' | 'email' | 'excel' | 'portal';
 export interface OrderSummary {
   id: number;
@@ -157,6 +167,9 @@ export interface OrderSummary {
   shipped: number;
   total: number;
   status: OrderStatus;
+  deliveredAt: string | null;
+  /** Teslim edildi yapılabilir (sevk edilmiş) */
+  deliverable: boolean;
   portalUser: string | null;
   isNew: boolean;
 }
@@ -195,6 +208,7 @@ export interface OrderDetail {
   customerRef: string | null;
   note: string | null;
   status: OrderStatus;
+  deliveredAt: string | null;
   total: number;
   portalUser: string | null;
   portalPhone: string | null;
@@ -586,7 +600,10 @@ export const api = {
   unreceiveLot: (id: number) => req('POST', `/api/lots/${id}/unreceive`, {}),
   deleteLot: (id: number) => req('DELETE', `/api/lots/${id}`),
 
-  orders: (o: { status?: 'open' | 'all' | 'portal'; customerId?: number; q?: string } = {}) => req<OrderSummary[]>('GET', `/api/orders${qs(o)}`),
+  orders: (o: OrderListQuery = {}) => req<OrderSummary[]>('GET', `/api/orders${qs({ ...o, portal: o.portal ? 1 : null })}`),
+  orderSummary: (o: OrderListQuery = {}) => req<{ count: number; qty: number; total: number }>('GET', `/api/orders/summary${qs({ ...o, portal: o.portal ? 1 : null })}`),
+  deliverOrders: (ids: number[]) => req<{ count: number; orders: string[] }>('POST', '/api/orders/deliver', { ids }),
+  undeliverOrder: (id: number) => req('POST', `/api/orders/${id}/undeliver`, {}),
   incomingOrders: () => req<{ count: number }>('GET', '/api/orders/incoming'),
   portalUsers: () => req<PortalUser[]>('GET', '/api/portal-users'),
   savePortalUser: (id: number | null, b: PortalUserInput) => req<{ id: number }>(id ? 'PUT' : 'POST', id ? `/api/portal-users/${id}` : '/api/portal-users', b),
@@ -633,6 +650,7 @@ export const ORDER_STATUS: Record<OrderStatus, { label: string; tone: Tone }> = 
   open: { label: 'Açık', tone: 'brand' },
   partial: { label: 'Kısmi sevk', tone: 'warn' },
   shipped: { label: 'Sevk edildi', tone: 'ok' },
+  delivered: { label: 'Teslim edildi', tone: 'ok' },
   closed: { label: 'Kapandı', tone: 'muted' },
   cancelled: { label: 'İptal', tone: 'muted' },
 };

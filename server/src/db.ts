@@ -445,6 +445,11 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE customers ADD COLUMN discount NUMERIC(5,2) NOT NULL DEFAULT 0 CHECK (discount >= 0 AND discount < 100);
   `,
+  // 8 — Teslim edildi: sevk edilen sipariş müşteriye ulaştı (toplu işaretlenir)
+  `
+  ALTER TABLE orders ADD COLUMN delivered_at DATE;
+  CREATE INDEX orders_date ON orders(date);
+  `,
 ];
 
 async function migrate(db: Db, MIGRATIONS: string[]) {

@@ -73,7 +73,7 @@ describe('Başak Rozet akışı', () => {
     expect(mine[0]).toMatchObject({ no: o.body.no, customerName: 'Moda', status: 'open', total: 10 * 5500 + 2 * 7000, byName: 'Ayşe' });
     // Ekip: gelen siparişler
     expect((await req('GET', '/api/orders/incoming')).count).toBe(1);
-    const inc = await req('GET', '/api/orders?status=portal');
+    const inc = await req('GET', '/api/orders?status=all&portal=1');
     expect(inc).toHaveLength(1);
     expect(inc[0]).toMatchObject({ channel: 'portal', portalUser: 'Ayşe', isNew: true });
     const d = await req('GET', `/api/orders/${o.body.id}`);
@@ -137,6 +137,46 @@ describe('Başak Rozet akışı', () => {
     o = await req('POST', '/api/orders', { customerId: s.moda.id, date: '2026-10-22', lines: [{ productId: s.a.id, qty: 1 }, { productId: s.b.id, qty: 1, unitPrice: 4100 }] });
     expect((await req('GET', `/api/orders/${o.id}`)).lines.map((l: any) => l.unitPrice)).toEqual([5250, 4100]);
     await expect(req('PUT', `/api/customers/${s.solo.id}`, { ...solo, discount: 100 })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('sipariş listesi: tarih aralığı, durum süzgeci, toplamlar ve toplu teslim', async () => {
+    const s = await setup();
+    await req('POST', `/api/products/${s.a.id}/adjust`, { date: '2026-09-01', qty: 500, unitCost: 2000 });
+    const mk = (date: string, qty: number, customerId = s.solo.id) => req('POST', '/api/orders', { customerId, date, lines: [{ productId: s.a.id, qty }] });
+    const o1 = await mk('2026-09-10', 10); // sevk → teslim
+    const o2 = await mk('2026-10-05', 20); // sevk
+    const o3 = await mk('2026-10-06', 30); // açık
+    const o4 = await mk('2026-10-07', 40); // iptal
+    const o5 = await mk('2026-10-08', 50); // 20 sevk, kalanı kapatıldı
+    const ship = async (o: { id: number }, qty: number) => {
+      const d = await req('GET', `/api/orders/${o.id}`);
+      await req('POST', '/api/dispatches', { date: '2026-10-09', customerId: s.solo.id, orderId: o.id, lines: [{ productId: s.a.id, qty, orderLineId: d.lines[0].id }] });
+    };
+    await ship(o1, 10);
+    await ship(o2, 20);
+    await ship(o5, 20);
+    await req('POST', `/api/orders/${o4.id}/close`, {});
+    await req('POST', `/api/orders/${o5.id}/close`, {});
+
+    // açık sipariş teslim edilemez; hiçbir şey değişmez
+    await expect(req('POST', '/api/orders/deliver', { ids: [o1.id, o3.id] })).rejects.toMatchObject({ status: 400 });
+    expect((await req('GET', `/api/orders/${o1.id}`)).status).toBe('shipped');
+    expect((await req('POST', '/api/orders/deliver', { ids: [o1.id, o5.id] })).count).toBe(2);
+    expect(await req('GET', `/api/orders/${o1.id}`)).toMatchObject({ status: 'delivered', deliveredAt: '2026-10-22' });
+
+    const st = async (qs: string) => (await req('GET', `/api/orders?${qs}`)).map((o: any) => o.no);
+    expect(await st('status=delivered')).toHaveLength(2);
+    expect(await st('status=shipped')).toEqual([o2.no]);
+    expect(await st('status=pending')).toEqual([o3.no]);
+    expect(await st('status=all&from=2026-10-01&to=2026-10-06')).toEqual([o3.no, o2.no]);
+    expect((await req('GET', '/api/orders?status=all')).find((o: any) => o.id === o2.id)).toMatchObject({ deliverable: true });
+
+    // toplam: iptal 0, kalanı kapatılan yalnız sevk edilen kısım
+    expect(await req('GET', '/api/orders/summary?status=all&from=2026-10-01&to=2026-10-31')).toEqual({ count: 4, qty: 20 + 30 + 0 + 20, total: 70 * 6000 });
+    expect(await req('GET', '/api/orders/summary?status=delivered')).toEqual({ count: 2, qty: 30, total: 30 * 6000 });
+
+    await req('POST', `/api/orders/${o1.id}/undeliver`, {});
+    expect((await req('GET', `/api/orders/${o1.id}`)).status).toBe('shipped');
   });
 
   it('müşteri ağacı, özel fiyat ve zincire özel ürün', async () => {

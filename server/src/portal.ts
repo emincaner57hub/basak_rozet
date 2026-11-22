@@ -144,7 +144,7 @@ export function registerPortal(app: FastifyInstance, o: { db: Db; secret: string
     const u = await need(req);
     const ids = (await allowedCustomers(db, u.id)).map((c) => c.id);
     const rows = await db.query<Row & { cancelled: boolean; qty: number; shipped: number }>(
-      `SELECT o.id, o.no, o.date, o.requested_date "requestedDate", o.customer_ref "customerRef", o.cancelled, c.name "customerName",
+      `SELECT o.id, o.no, o.date, o.requested_date "requestedDate", o.customer_ref "customerRef", o.cancelled, o.delivered_at "deliveredAt", c.name "customerName",
               pu.name "byName",
               (SELECT COALESCE(SUM(ol.qty),0) FROM order_lines ol WHERE ol.order_id = o.id) qty,
               ${SHIPPED_SUM} shipped,
@@ -153,14 +153,14 @@ export function registerPortal(app: FastifyInstance, o: { db: Db; secret: string
        WHERE o.customer_id = ANY($1::int[]) ORDER BY o.date DESC, o.id DESC LIMIT 100`,
       [ids],
     );
-    return rows.map((r) => ({ ...r, total: u.seePrices ? r.total : null, status: statusOf(r.cancelled, Number(r.qty), Number(r.shipped)) }));
+    return rows.map((r) => ({ ...r, total: u.seePrices ? r.total : null, status: statusOf(r.cancelled, Number(r.qty), Number(r.shipped), r.deliveredAt as string | null) }));
   });
 
   app.get('/api/portal/orders/:id', async (req) => {
     const u = await need(req);
     const id = idParam(req.params);
     const [ord] = await db.query<Row & { customerId: number; cancelled: boolean }>(
-      `SELECT o.id, o.no, o.date, o.requested_date "requestedDate", o.customer_ref "customerRef", o.note, o.cancelled, o.customer_id "customerId", c.name "customerName"
+      `SELECT o.id, o.no, o.date, o.requested_date "requestedDate", o.customer_ref "customerRef", o.note, o.cancelled, o.delivered_at "deliveredAt", o.customer_id "customerId", c.name "customerName"
        FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id = $1`,
       [id],
     );
@@ -174,7 +174,7 @@ export function registerPortal(app: FastifyInstance, o: { db: Db; secret: string
     );
     const qty = lines.reduce((s, l) => s + Number(l.qty), 0);
     const shipped = lines.reduce((s, l) => s + Math.min(Number(l.shipped), Number(l.qty)), 0);
-    return { ...ord, lines: u.seePrices ? lines : lines.map((l) => ({ ...l, unitPrice: null })), status: statusOf(ord.cancelled, qty, shipped) };
+    return { ...ord, lines: u.seePrices ? lines : lines.map((l) => ({ ...l, unitPrice: null })), status: statusOf(ord.cancelled, qty, shipped, ord.deliveredAt as string | null) };
   });
 
   // ---------------- Ekip: satın almacı kullanıcıları (Ayarlar) ----------------

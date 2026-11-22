@@ -59,7 +59,7 @@ async function preq<T>(method: string, url: string, body?: unknown): Promise<T> 
 }
 
 const branchLabel = (b: Branch) => (b.chainName ? `${b.chainName} · ${b.name}` : b.name);
-const STATUS_TEXT: Record<OrderStatus, string> = { open: 'Alındı', partial: 'Kısmen gönderildi', shipped: 'Gönderildi', closed: 'Kapandı', cancelled: 'İptal' };
+const STATUS_TEXT: Record<OrderStatus, string> = { open: 'Alındı', partial: 'Kısmen gönderildi', shipped: 'Gönderildi', delivered: 'Teslim edildi', closed: 'Kapandı', cancelled: 'İptal' };
 
 export default function PortalApp() {
   const [state, setState] = useState<'loading' | 'login' | 'ok'>('loading');

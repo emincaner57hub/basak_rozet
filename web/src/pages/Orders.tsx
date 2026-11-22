@@ -1,16 +1,42 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, CHANNEL_LABEL, ORDER_STATUS, type CatalogItem, type Channel, type Customer, type ImportPreview, type OrderDetail, type OrderSummary } from '../api';
+import { api, CHANNEL_LABEL, ORDER_STATUS, type CatalogItem, type Channel, type Customer, type ImportPreview, type OrderDetail, type OrderFilter, type OrderSummary } from '../api';
 import { Link, queryParam, useNav } from '../router';
-import { Badge, Confirm, Empty, ErrorLine, Field, IntInput, MoneyInput, Page, SearchSelect, fileToBase64, useLoad, useToast } from '../ui';
+import { Badge, Confirm, Empty, ErrorLine, Field, IntInput, MoneyInput, Page, SearchSelect, Stat, fileToBase64, useLoad, useToast } from '../ui';
 import { fmtNum, formatTL, today, trDate } from '../money';
 
-export function OrdersTable({ rows, showCustomer = true }: { rows: OrderSummary[]; showCustomer?: boolean }) {
+export function OrdersTable({
+  rows,
+  showCustomer = true,
+  selected,
+  onToggle,
+}: {
+  rows: OrderSummary[];
+  showCustomer?: boolean;
+  /** Verilirse solda seçim kutuları çıkar (yalnız teslim edilebilir siparişler seçilir) */
+  selected?: Set<number>;
+  onToggle?: (ids: number[], on: boolean) => void;
+}) {
   const { go } = useNav();
+  const selecting = !!selected && !!onToggle;
+  const selectable = rows.filter((o) => o.deliverable);
+  const allOn = selectable.length > 0 && selectable.every((o) => selected?.has(o.id));
   return (
     <>
       <table className="tbl">
         <thead>
           <tr>
+            {selecting && (
+              <th className="w-8">
+                <input
+                  type="checkbox"
+                  aria-label="Teslim edilebilenlerin tümünü seç"
+                  title="Sevk edilmiş siparişlerin tümünü seç"
+                  disabled={!selectable.length}
+                  checked={allOn}
+                  onChange={(e) => onToggle!(selectable.map((o) => o.id), e.target.checked)}
+                />
+              </th>
+            )}
             <th>Sipariş</th>
             <th>Tarih</th>
             {showCustomer && <th>Müşteri</th>}
@@ -22,39 +48,59 @@ export function OrdersTable({ rows, showCustomer = true }: { rows: OrderSummary[
           </tr>
         </thead>
         <tbody>
-          {rows.map((o) => (
-            <tr key={o.id} className="clickable" onClick={() => go(`/siparisler/${o.id}`)}>
-              <td className="whitespace-nowrap font-medium">
-                {o.no}
-                {o.customerRef && <div className="text-xs font-normal text-muted">Ref: {o.customerRef}</div>}
-              </td>
-              <td>
-                {trDate(o.date)}
-                {o.requestedDate && <div className="text-xs text-muted">istenen {trDate(o.requestedDate)}</div>}
-              </td>
-              {showCustomer && (
-                <td>
-                  {o.chainName && <div className="text-xs text-muted">{o.chainName}</div>}
-                  {o.customerName}
-                </td>
-              )}
-              <td className="text-xs">
-                {CHANNEL_LABEL[o.channel]}
-                {o.portalUser && <div className="text-muted">{o.portalUser}</div>}
-                {o.isNew && (
-                  <span className="ml-0 mt-0.5 inline-block">
-                    <Badge tone="warn">yeni</Badge>
-                  </span>
+          {rows.map((o) => {
+            const on = !!selected?.has(o.id);
+            return (
+              <tr
+                key={o.id}
+                className={`clickable ${selecting && !o.deliverable ? 'opacity-50' : ''} ${on ? 'bg-brand/5' : ''}`}
+                onClick={() => (selecting ? o.deliverable && onToggle!([o.id], !on) : go(`/siparisler/${o.id}`))}
+              >
+                {selecting && (
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      aria-label={`${o.no} seç`}
+                      title={o.deliverable ? undefined : o.status === 'delivered' ? 'Zaten teslim edildi' : 'Önce sevk edilmeli'}
+                      disabled={!o.deliverable}
+                      checked={on}
+                      onChange={(e) => onToggle!([o.id], e.target.checked)}
+                    />
+                  </td>
                 )}
-              </td>
-              <td className="tabular text-right">{fmtNum(o.qty)}</td>
-              <td className="tabular text-right">{fmtNum(o.shipped)}</td>
-              <td className="tabular text-right">{formatTL(o.total)}</td>
-              <td>
-                <Badge tone={ORDER_STATUS[o.status].tone}>{ORDER_STATUS[o.status].label}</Badge>
-              </td>
-            </tr>
-          ))}
+                <td className="whitespace-nowrap font-medium">
+                  {o.no}
+                  {o.customerRef && <div className="text-xs font-normal text-muted">Ref: {o.customerRef}</div>}
+                </td>
+                <td>
+                  {trDate(o.date)}
+                  {o.requestedDate && <div className="text-xs text-muted">istenen {trDate(o.requestedDate)}</div>}
+                </td>
+                {showCustomer && (
+                  <td>
+                    {o.chainName && <div className="text-xs text-muted">{o.chainName}</div>}
+                    {o.customerName}
+                  </td>
+                )}
+                <td className="text-xs">
+                  {CHANNEL_LABEL[o.channel]}
+                  {o.portalUser && <div className="text-muted">{o.portalUser}</div>}
+                  {o.isNew && (
+                    <span className="ml-0 mt-0.5 inline-block">
+                      <Badge tone="warn">yeni</Badge>
+                    </span>
+                  )}
+                </td>
+                <td className="tabular text-right">{fmtNum(o.qty)}</td>
+                <td className="tabular text-right">{fmtNum(o.shipped)}</td>
+                <td className="tabular text-right">{formatTL(o.total)}</td>
+                <td>
+                  <Badge tone={ORDER_STATUS[o.status].tone}>{ORDER_STATUS[o.status].label}</Badge>
+                  {o.deliveredAt && <div className="mt-0.5 text-xs text-muted">{trDate(o.deliveredAt)}</div>}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       {!rows.length && <Empty>Sipariş yok.</Empty>}
@@ -62,58 +108,193 @@ export function OrdersTable({ rows, showCustomer = true }: { rows: OrderSummary[
   );
 }
 
+const STATUS_FILTERS: [OrderFilter, string][] = [
+  ['pending', 'Bekleyenler (açık + kısmi)'],
+  ['open', 'Açık'],
+  ['partial', 'Kısmi sevk'],
+  ['shipped', 'Sevk edildi'],
+  ['delivered', 'Teslim edildi'],
+  ['closed', 'Kapandı'],
+  ['cancelled', 'İptal'],
+  ['all', 'Tümü'],
+];
+
+/** Hızlı tarih aralıkları */
+function presetRange(k: 'month' | 'lastMonth' | 'year'): [string, string] {
+  const [y, m] = today().split('-').map(Number);
+  const iso = (yy: number, mm: number, dd: number) => `${yy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+  const last = (yy: number, mm: number) => new Date(Date.UTC(yy, mm, 0)).getUTCDate();
+  if (k === 'month') return [iso(y, m, 1), iso(y, m, last(y, m))];
+  if (k === 'lastMonth') {
+    const [py, pm] = m === 1 ? [y - 1, 12] : [y, m - 1];
+    return [iso(py, pm, 1), iso(py, pm, last(py, pm))];
+  }
+  return [iso(y, 1, 1), iso(y, 12, 31)];
+}
+
 export function OrdersPage() {
-  const { path } = useNav();
-  const [status, setStatus] = useState<'open' | 'all' | 'portal'>(queryParam(path, 'durum') === 'gelen' ? 'portal' : 'open');
+  const { path, go } = useNav();
+  const toast = useToast();
+  const incoming = queryParam(path, 'durum') === 'gelen';
+  const [status, setStatus] = useState<OrderFilter>(incoming ? 'all' : 'pending');
+  const [portal, setPortal] = useState(incoming);
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
   const [q, setQ] = useState('');
   const [qd, setQd] = useState('');
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
   useEffect(() => {
     const t = setTimeout(() => setQd(q), 250);
     return () => clearTimeout(t);
   }, [q]);
   useEffect(() => {
-    if (queryParam(path, 'durum') === 'gelen') setStatus('portal');
+    if (queryParam(path, 'durum') === 'gelen') {
+      setPortal(true);
+      setStatus('all');
+    }
   }, [path]);
-  const { data, error } = useLoad(() => api.orders({ status, q: qd }), [status, qd]);
-  const { go } = useNav();
+  const filter = { status, portal, q: qd, from: from || undefined, to: to || undefined };
+  const deps = [status, portal, qd, from, to];
+  const { data, error, reload } = useLoad(() => api.orders(filter), deps);
+  const sum = useLoad(() => api.orderSummary(filter), deps);
   const newCount = data?.filter((o) => o.isNew).length ?? 0;
+  const toggle = (ids: number[], on: boolean) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      for (const id of ids) on ? n.add(id) : n.delete(id);
+      return n;
+    });
+  const stopSelecting = () => {
+    setSelecting(false);
+    setSelected(new Set());
+    setErr('');
+  };
+  async function deliver() {
+    setBusy(true);
+    setErr('');
+    try {
+      const r = await api.deliverOrders([...selected]);
+      toast(`${r.count} sipariş teslim edildi`);
+      stopSelecting();
+      reload();
+      sum.reload();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const rangeText = from || to ? `${from ? trDate(from) : '…'} – ${to ? trDate(to) : '…'}` : 'Tüm tarihler';
   return (
     <Page
       title="Siparişler"
       subtitle={
-        status === 'portal'
+        portal
           ? `Müşterilerin satın almacılarının cepten verdiği siparişler${newCount ? ` · ${newCount} yeni (açılmamış)` : ''}`
           : "Panelden, telefon / WhatsApp ile girilen, Excel'den yüklenen ya da müşterinin cepten verdiği siparişler"
       }
       actions={
-        <>
-          <button className="btn" onClick={() => go('/siparisler/excel')}>
-            Excel'den yükle
-          </button>
-          <button className="btn btn-primary" onClick={() => go('/siparisler/yeni')}>
-            + Yeni sipariş
-          </button>
-        </>
+        selecting ? (
+          <>
+            <button className="btn" onClick={stopSelecting}>
+              Vazgeç
+            </button>
+            <button className="btn btn-primary" disabled={!selected.size || busy} onClick={deliver}>
+              Teslim edildi yap{selected.size ? ` (${selected.size})` : ''}
+            </button>
+          </>
+        ) : (
+          <>
+            <button className="btn" onClick={() => setSelecting(true)}>
+              Teslim et
+            </button>
+            <button className="btn" onClick={() => go('/siparisler/excel')}>
+              Excel'den yükle
+            </button>
+            <button className="btn btn-primary" onClick={() => go('/siparisler/yeni')}>
+              + Yeni sipariş
+            </button>
+          </>
+        )
       }
     >
       <ErrorLine error={error} />
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="flex rounded-lg border border-line bg-card p-0.5">
+      <div className="mb-3 grid grid-cols-3 gap-3">
+        <Stat label="Toplam adet" value={sum.data ? fmtNum(sum.data.qty) : '…'} sub={`${rangeText} · ${sum.data ? fmtNum(sum.data.count) : '…'} sipariş`} />
+        <Stat label="Toplam satış (KDV hariç)" value={sum.data ? formatTL(sum.data.total) : '…'} sub="İptal edilen ve kapatılan kısım hariç" />
+        <Stat label="Durum" value={STATUS_FILTERS.find(([v]) => v === status)?.[1] ?? ''} sub={portal ? 'Yalnız müşteriden gelenler' : 'Tüm kanallar'} />
+      </div>
+      <div className="mb-3 flex flex-wrap items-end gap-2">
+        <Field label="Başlangıç">
+          <input type="date" className="input" value={from} onChange={(e) => setFrom(e.target.value)} />
+        </Field>
+        <Field label="Bitiş">
+          <input type="date" className="input" value={to} onChange={(e) => setTo(e.target.value)} />
+        </Field>
+        <div className="flex gap-1 pb-0.5">
           {(
             [
-              ['open', 'Bekleyenler'],
-              ['portal', 'Gelen (müşteriden)'],
-              ['all', 'Tümü'],
+              ['month', 'Bu ay'],
+              ['lastMonth', 'Geçen ay'],
+              ['year', 'Bu yıl'],
             ] as const
-          ).map(([v, l]) => (
-            <button key={v} onClick={() => setStatus(v)} className={`rounded-md px-3 py-1.5 text-sm ${status === v ? 'bg-brand text-white' : 'text-muted'}`}>
+          ).map(([k, l]) => (
+            <button
+              key={k}
+              className="btn btn-sm"
+              onClick={() => {
+                const [a, b] = presetRange(k);
+                setFrom(a);
+                setTo(b);
+              }}
+            >
               {l}
             </button>
           ))}
+          {(from || to) && (
+            <button
+              className="btn btn-sm"
+              onClick={() => {
+                setFrom('');
+                setTo('');
+              }}
+            >
+              Tüm tarihler
+            </button>
+          )}
         </div>
+        <Field label="Durum">
+          <select className="input" value={status} onChange={(e) => setStatus(e.target.value as OrderFilter)}>
+            {STATUS_FILTERS.map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <label className="flex items-center gap-1.5 pb-2 text-sm">
+          <input type="checkbox" checked={portal} onChange={(e) => setPortal(e.target.checked)} /> Yalnız müşteriden gelen
+        </label>
         <input className="input max-w-xs" placeholder="Sipariş no, müşteri, zincir, referans…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-      <div className="card overflow-x-auto">{data && <OrdersTable rows={data} />}</div>
+      {selecting && (
+        <div className="mb-3 flex items-center gap-3 rounded-lg bg-brand/10 px-3 py-2 text-sm">
+          <span>
+            Teslim edilen siparişleri soldan işaretleyin, sonra <b>Teslim edildi yap</b>'a basın. Yalnız sevk edilmiş siparişler seçilebilir.
+          </span>
+          {status !== 'shipped' && (
+            <button className="btn btn-sm ml-auto" onClick={() => setStatus('shipped')}>
+              Yalnız sevk edilenleri göster
+            </button>
+          )}
+        </div>
+      )}
+      {err && <div className="mb-3 text-sm text-bad">{err}</div>}
+      <div className="card overflow-x-auto">{data && <OrdersTable rows={data} selected={selecting ? selected : undefined} onToggle={selecting ? toggle : undefined} />}</div>
+      {data && data.length >= 500 && <div className="mt-2 text-xs text-muted">İlk 500 sipariş gösteriliyor; toplamlar tüm süzgece göre.</div>}
     </Page>
   );
 }
@@ -341,7 +522,7 @@ export function OrderNewPage() {
 export function OrderPage({ id }: { id: number }) {
   const { data: o, error, reload } = useLoad(() => api.order(id), [id]);
   const [editing, setEditing] = useState(false);
-  const [confirm, setConfirm] = useState<'close' | 'reopen' | 'delete' | null>(null);
+  const [confirm, setConfirm] = useState<'close' | 'reopen' | 'delete' | 'deliver' | 'undeliver' | null>(null);
   const { go } = useNav();
   const toast = useToast();
   if (!o) return <Page title="…">{<ErrorLine error={error} />}</Page>;
@@ -384,6 +565,7 @@ export function OrderPage({ id }: { id: number }) {
             </>
           )}
           {o.requestedDate && ` · istenen teslim ${trDate(o.requestedDate)}`}
+          {o.deliveredAt && ` · teslim edildi ${trDate(o.deliveredAt)}`}
           {o.customerRef && ` · ref ${o.customerRef}`}
         </>
       }
@@ -394,7 +576,17 @@ export function OrderPage({ id }: { id: number }) {
               Sevk et (irsaliye)
             </button>
           )}
-          {!o.cancelled && o.status !== 'shipped' && (
+          {(o.status === 'shipped' || o.status === 'closed') && (
+            <button className="btn btn-primary" onClick={() => setConfirm('deliver')}>
+              Teslim edildi
+            </button>
+          )}
+          {o.status === 'delivered' && (
+            <button className="btn" onClick={() => setConfirm('undeliver')}>
+              Teslimi geri al
+            </button>
+          )}
+          {!o.cancelled && o.status !== 'shipped' && o.status !== 'delivered' && (
             <button className="btn" onClick={() => setEditing(true)}>
               Düzenle
             </button>
@@ -474,20 +666,40 @@ export function OrderPage({ id }: { id: number }) {
       </div>
       {confirm && (
         <Confirm
-          title={confirm === 'delete' ? 'Siparişi sil' : confirm === 'reopen' ? 'Siparişi yeniden aç' : 'Siparişi kapat'}
+          title={
+            confirm === 'delete'
+              ? 'Siparişi sil'
+              : confirm === 'reopen'
+                ? 'Siparişi yeniden aç'
+                : confirm === 'deliver'
+                  ? 'Teslim edildi'
+                  : confirm === 'undeliver'
+                    ? 'Teslimi geri al'
+                    : 'Siparişi kapat'
+          }
           text={
             confirm === 'delete'
               ? 'Sipariş tamamen silinir.'
               : confirm === 'reopen'
                 ? 'Sevk edilmeyen kısım yeniden bekleyenlere döner.'
-                : 'Sevk edilmeyen kısım iptal edilir; sevk edilenler kalır.'
+                : confirm === 'deliver'
+                  ? 'Sipariş bugünün tarihiyle teslim edildi olarak işaretlenir.'
+                  : confirm === 'undeliver'
+                    ? 'Sipariş yeniden "sevk edildi" durumuna döner.'
+                    : 'Sevk edilmeyen kısım iptal edilir; sevk edilenler kalır.'
           }
-          danger={confirm !== 'reopen'}
+          danger={confirm === 'delete' || confirm === 'close'}
           onClose={() => setConfirm(null)}
           onYes={async () => {
             if (confirm === 'delete') {
               await api.deleteOrder(o.id);
               go('/siparisler');
+            } else if (confirm === 'deliver') {
+              await api.deliverOrders([o.id]);
+              reload();
+            } else if (confirm === 'undeliver') {
+              await api.undeliverOrder(o.id);
+              reload();
             } else {
               await api.closeOrder(o.id, confirm === 'close');
               reload();
