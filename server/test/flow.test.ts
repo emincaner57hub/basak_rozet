@@ -109,6 +109,36 @@ describe('Başak Rozet akışı', () => {
     expect(r.statusCode).toBe(401);
   });
 
+  it('müşteri indirimi: siparişte fiyata uygulanır; 0 ise yok; şube zincirin indirimini alır', async () => {
+    const s = await setup();
+    // 0 → indirim yok
+    let o = await req('POST', '/api/orders', { customerId: s.solo.id, date: '2026-10-22', lines: [{ productId: s.a.id, qty: 2 }] });
+    expect((await req('GET', `/api/orders/${o.id}`)).lines[0].unitPrice).toBe(6000);
+    // tek kafeye %10
+    const solo = await req('GET', `/api/customers/${s.solo.id}`);
+    await req('PUT', `/api/customers/${s.solo.id}`, { ...solo, discount: 10 });
+    expect((await req('GET', `/api/customers/${s.solo.id}`)).discount).toBe(10);
+    o = await req('POST', '/api/orders', { customerId: s.solo.id, date: '2026-10-22', lines: [{ productId: s.a.id, qty: 2 }, { productId: s.stand.id, qty: 1 }] });
+    const d = await req('GET', `/api/orders/${o.id}`);
+    expect(d.lines.map((l: any) => l.unitPrice)).toEqual([5400, 0]); // promosyon 0 kalır
+    expect(d.total).toBe(10800);
+    // zincire %12,5 ve özel fiyat → şube (kendi indirimi 0) zincirinkini alır, özel fiyatın üstüne
+    const chain = await req('GET', `/api/customers/${s.chain.id}`);
+    await req('PUT', `/api/customers/${s.chain.id}`, { ...chain, discount: 12.5 });
+    await req('PUT', `/api/customers/${s.chain.id}/prices/${s.b.id}`, { price: 4000 });
+    const cat = await req('GET', `/api/customers/${s.moda.id}/catalog`);
+    expect(cat.find((p: any) => p.code === 'R-2')).toMatchObject({ basePrice: 4000, price: 3500, discount: 12.5 });
+    // şubenin kendi indirimi zincirinkini ezer
+    const izmir = await req('GET', `/api/customers/${s.izmir.id}`);
+    await req('PUT', `/api/customers/${s.izmir.id}`, { ...izmir, discount: 5 });
+    expect((await req('GET', `/api/customers/${s.izmir.id}`)).parentDiscount).toBe(12.5);
+    expect((await req('GET', `/api/customers/${s.izmir.id}/catalog`)).find((p: any) => p.code === 'R-1').price).toBe(5700);
+    // elle girilen fiyat olduğu gibi kalır; irsaliye → fatura indirimli fiyatla
+    o = await req('POST', '/api/orders', { customerId: s.moda.id, date: '2026-10-22', lines: [{ productId: s.a.id, qty: 1 }, { productId: s.b.id, qty: 1, unitPrice: 4100 }] });
+    expect((await req('GET', `/api/orders/${o.id}`)).lines.map((l: any) => l.unitPrice)).toEqual([5250, 4100]);
+    await expect(req('PUT', `/api/customers/${s.solo.id}`, { ...solo, discount: 100 })).rejects.toMatchObject({ status: 400 });
+  });
+
   it('müşteri ağacı, özel fiyat ve zincire özel ürün', async () => {
     const s = await setup();
     await expect(req('POST', '/api/customers', { name: 'Yetim şube', kind: 'branch' })).rejects.toMatchObject({ status: 400 });

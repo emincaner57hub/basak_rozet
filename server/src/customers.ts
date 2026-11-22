@@ -24,6 +24,7 @@ export interface CustomerRow {
   phone: string | null;
   email: string | null;
   payment_days: number;
+  discount: number;
   opening_balance: number;
   opening_date: string | null;
   note: string | null;
@@ -48,14 +49,33 @@ export async function priceScopes(q: Queryable, customerId: number): Promise<num
   return c.parent_id ? [c.id, c.parent_id] : [c.id];
 }
 
-/** Müşterinin görebildiği ürünler ve fiyatları (zincire özel ürünler yalnız o zincirde) */
+/**
+ * Müşteriye uygulanacak indirim (%): kendi kartındaki; şubede 0 ise bağlı olduğu zincirin.
+ * 0 = indirim yok.
+ */
+export async function discountFor(q: Queryable, customerId: number): Promise<number> {
+  const [r] = await q.query<{ d: number }>(
+    `SELECT COALESCE(NULLIF(c.discount, 0), p.discount, 0) d FROM customers c LEFT JOIN customers p ON p.id = c.parent_id WHERE c.id = $1`,
+    [customerId],
+  );
+  return Number(r?.d ?? 0);
+}
+
+/** İndirimli birim fiyat (kuruş, yuvarlanır) */
+export const applyDiscount = (price: number, discount: number) => (discount > 0 ? Math.round((price * (100 - discount)) / 100) : price);
+
+/**
+ * Müşterinin görebildiği ürünler ve fiyatları (zincire özel ürünler yalnız o zincirde).
+ * price: müşteriye satış fiyatı = (özel fiyat, yoksa liste fiyatı) − müşteri indirimi; basePrice: indirimsiz.
+ */
 export async function catalogFor(q: Queryable, customerId: number) {
   const scopes = await priceScopes(q, customerId);
   const chainId = scopes.length > 1 ? scopes[1] : scopes[0];
-  return q.query<{ id: number; code: string; name: string; kind: string; category: string | null; unit: string; vatRate: number; listPrice: number | null; price: number | null; special: boolean; onHand: number; chainId: number | null; image: string | null; sellable: boolean }>(
+  const discount = await discountFor(q, customerId);
+  const rows = await q.query<{ id: number; code: string; name: string; kind: string; category: string | null; unit: string; vatRate: number; listPrice: number | null; basePrice: number | null; special: boolean; onHand: number; chainId: number | null; image: string | null; sellable: boolean }>(
     `SELECT p.id, p.code, p.name, p.kind, p.category, p.unit, p.vat_rate "vatRate", p.list_price "listPrice", p.chain_id "chainId", p.image, p.sellable,
             COALESCE((SELECT pr.price FROM prices pr WHERE pr.product_id = p.id AND pr.customer_id = ANY($1::int[])
-                      ORDER BY array_position($1::int[], pr.customer_id) LIMIT 1), p.list_price) price,
+                      ORDER BY array_position($1::int[], pr.customer_id) LIMIT 1), p.list_price) "basePrice",
             EXISTS (SELECT 1 FROM prices pr WHERE pr.product_id = p.id AND pr.customer_id = ANY($1::int[])) special,
             COALESCE((SELECT SUM(m.qty) FROM stock_moves m WHERE m.product_id = p.id), 0) "onHand"
      FROM products p
@@ -63,6 +83,10 @@ export async function catalogFor(q: Queryable, customerId: number) {
      ORDER BY p.kind DESC, p.category NULLS LAST, p.code`,
     [scopes, chainId],
   );
+  return rows.map((r) => {
+    const d = r.kind === 'promo' ? 0 : discount;
+    return { ...r, discount: d, price: r.basePrice == null ? null : applyDiscount(r.basePrice, d) };
+  });
 }
 
 /**
@@ -110,6 +134,8 @@ const customerSchema = z
     phone: optText(40),
     email: optText(120),
     paymentDays: z.number().int().min(0).max(365).default(30),
+    /** İndirim %: satışta fiyata uygulanır; 0 = indirim yok */
+    discount: z.number().min(0, 'İndirim 0 ile 99,99 arası olmalı').max(99.99, 'İndirim 0 ile 99,99 arası olmalı').default(0).transform((v) => Math.round(v * 100) / 100),
     openingBalance: z.number().int().default(0),
     openingDate: daySchema.nullish(),
     note: optText(1000),
@@ -135,6 +161,9 @@ const mapCustomer = (r: Row) => ({
   phone: r.phone,
   email: r.email,
   paymentDays: r.payment_days,
+  discount: Number(r.discount ?? 0),
+  /** Şubenin bağlı olduğu zincirin indirimi (şubede 0 ise bu uygulanır) */
+  parentDiscount: r.parent_discount == null ? null : Number(r.parent_discount),
   openingBalance: r.opening_balance,
   openingDate: r.opening_date,
   note: r.note,
@@ -149,7 +178,7 @@ export function registerCustomers(app: FastifyInstance, { db }: { db: Db }) {
   app.get('/api/customers', async (req) => {
     const q = z.object({ q: z.string().max(80).optional(), all: z.enum(['1']).optional() }).parse(req.query);
     const rows = await db.query<Row>(
-      `SELECT c.*, p.name parent_name,
+      `SELECT c.*, p.name parent_name, p.discount parent_discount,
               (SELECT COUNT(*) FROM customers b WHERE b.parent_id = c.id) branch_count,
               CASE WHEN c.kind <> 'branch' OR c.bill_to = 'self' THEN ${BALANCE_SQL} END balance
        FROM customers c LEFT JOIN customers p ON p.id = c.parent_id
@@ -164,7 +193,7 @@ export function registerCustomers(app: FastifyInstance, { db }: { db: Db }) {
   app.get('/api/customers/:id', async (req) => {
     const id = idParam(req.params);
     const [c] = await db.query<Row>(
-      `SELECT c.*, p.name parent_name, CASE WHEN c.kind <> 'branch' OR c.bill_to = 'self' THEN ${BALANCE_SQL} END balance
+      `SELECT c.*, p.name parent_name, p.discount parent_discount, CASE WHEN c.kind <> 'branch' OR c.bill_to = 'self' THEN ${BALANCE_SQL} END balance
        FROM customers c LEFT JOIN customers p ON p.id = c.parent_id WHERE c.id = $1`,
       [id],
     );
@@ -196,20 +225,20 @@ export function registerCustomers(app: FastifyInstance, { db }: { db: Db }) {
       }
       const vals = [
         b.code, b.name, b.kind, b.parentId ?? null, b.billTo, b.legalName, b.taxId, b.taxOffice, b.address, b.city, b.contactName,
-        b.phone, b.email, b.paymentDays, b.openingBalance, b.openingDate ?? null, b.note, b.active,
+        b.phone, b.email, b.paymentDays, b.openingBalance, b.openingDate ?? null, b.note, b.active, b.discount,
       ];
       if (id) {
         await q.query(
           `UPDATE customers SET code=$1, name=$2, kind=$3, parent_id=$4, bill_to=$5, legal_name=$6, tax_id=$7, tax_office=$8, address=$9, city=$10,
-             contact_name=$11, phone=$12, email=$13, payment_days=$14, opening_balance=$15, opening_date=$16, note=$17, active=$18 WHERE id=$19`,
+             contact_name=$11, phone=$12, email=$13, payment_days=$14, opening_balance=$15, opening_date=$16, note=$17, active=$18, discount=$19 WHERE id=$20`,
           [...vals, id],
         );
         return { id };
       }
       const [r] = await q.query<{ id: number }>(
         `INSERT INTO customers(code, name, kind, parent_id, bill_to, legal_name, tax_id, tax_office, address, city, contact_name, phone, email,
-           payment_days, opening_balance, opening_date, note, active)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+           payment_days, opening_balance, opening_date, note, active, discount)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
         vals,
       );
       return r;

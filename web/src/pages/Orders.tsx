@@ -254,12 +254,18 @@ function OrderForm({
                       disabled={!customerId}
                       onChange={(id, item) => upd(l.key, { productId: id, unitPrice: item ? (item.kind === 'promo' ? 0 : item.price) : null, qty: l.qty ?? null })}
                       label={(c) => `${c.code} · ${c.name}`}
-                      sub={(c) => `${c.kind === 'promo' ? 'Promosyon · ' : ''}${c.special ? 'Özel fiyat ' : ''}${formatTL(c.price)} · stok ${fmtNum(c.onHand)}`}
+                      sub={(c) => `${c.kind === 'promo' ? 'Promosyon · ' : ''}${c.special ? 'Özel fiyat ' : ''}${c.discount ? `%${fmtDisc(c.discount)} indirimli ` : ''}${formatTL(c.price)} · stok ${fmtNum(c.onHand)}`}
                       filter={(c, s) => `${c.code} ${c.name} ${c.category ?? ''}`.toLocaleLowerCase('tr').includes(s)}
                       placeholder={customerId ? 'Ürün kodu ya da adı…' : 'Önce müşteri seçin'}
                       ariaLabel="Ürün"
                     />
-                    {p?.special && <span className="mt-0.5 block text-[11px] text-brand">Özel fiyat (liste {formatTL(p.listPrice)})</span>}
+                    {p && (p.special || p.discount > 0) && (
+                      <span className="mt-0.5 block text-[11px] text-brand">
+                        {[p.special ? `Özel fiyat (liste ${formatTL(p.listPrice)})` : null, p.discount > 0 ? `%${fmtDisc(p.discount)} müşteri indirimi (${formatTL(p.basePrice)} yerine)` : null]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </span>
+                    )}
                   </td>
                   <td className={`tabular text-right text-xs ${p && l.qty && p.onHand < l.qty ? 'font-semibold text-warn' : 'text-muted'}`}>{p ? fmtNum(p.onHand) : ''}</td>
                   <td>
@@ -665,3 +671,5 @@ export function ExcelImportPage() {
     </Page>
   );
 }
+
+const fmtDisc = (n: number) => n.toLocaleString('tr-TR', { maximumFractionDigits: 2 });
