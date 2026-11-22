@@ -194,21 +194,97 @@ export function EInvoicesPage() {
   );
 }
 
-/** Tedarikçi carileri */
+/** Tedarikçi carileri: "sadece borçlu olduklarımız" süzgeci; havale / kredi kartıyla toplu borç kapama */
 export function SuppliersCariPage() {
-  const { data, error } = useLoad(() => api.supplierBalances(), []);
+  const { data, error, reload } = useLoad(() => api.supplierBalances(), []);
   const { go } = useNav();
+  const toast = useToast();
+  const [onlyDebt, setOnlyDebt] = useState(false);
+  const [closing, setClosing] = useState<'havale' | 'kart' | null>(null); // toplu kapama modu
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [date, setDate] = useState(today());
+  const [confirm, setConfirm] = useState(false);
   const total = (data ?? []).reduce((s, x) => s + x.balance, 0);
+  const rows = (data ?? []).filter((s) => !(onlyDebt || closing) || s.balance > 0);
+  const pickedRows = rows.filter((s) => picked.has(s.id));
+  const pickedSum = pickedRows.reduce((t, s) => t + s.balance, 0);
+  const allPicked = rows.length > 0 && rows.every((s) => picked.has(s.id));
+  const toggle = (id: number) =>
+    setPicked((p) => {
+      const n = new Set(p);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  const start = (m: 'havale' | 'kart') => {
+    setClosing(m);
+    setPicked(new Set());
+    setDate(today());
+  };
+  const stop = () => {
+    setClosing(null);
+    setPicked(new Set());
+  };
   return (
-    <Page title="Tedarikçi cari" subtitle="Gelen e-faturalar, ödemeler ve düzeltmeler · + bakiye: biz borçluyuz">
+    <Page
+      title="Tedarikçi cari"
+      subtitle="Gelen e-faturalar, ödemeler ve düzeltmeler · + bakiye: biz borçluyuz"
+      actions={
+        closing ? undefined : (
+          <>
+            <button className="btn" onClick={() => start('havale')}>
+              Borcu kapat · Havale
+            </button>
+            <button className="btn" onClick={() => start('kart')}>
+              Borcu kapat · Kredi kartı
+            </button>
+          </>
+        )
+      }
+    >
       <ErrorLine error={error} />
-      <div className="mb-3 text-sm text-muted">
-        Toplam borcumuz: <b className="text-ink">{formatTL(total)}</b>
+      <div className="mb-3 flex flex-wrap items-center gap-3 text-sm">
+        <span className="text-muted">
+          Toplam borcumuz: <b className="text-ink">{formatTL(total)}</b>
+        </span>
+        {!closing && (
+          <label className="flex items-center gap-1.5">
+            <input type="checkbox" checked={onlyDebt} onChange={(e) => setOnlyDebt(e.target.checked)} /> Sadece borçlu olduklarımız
+          </label>
+        )}
       </div>
+      {closing && (
+        <div className="card mb-3 flex flex-wrap items-center gap-3 border-brand/40 p-3 text-sm">
+          <b>{PAY_METHOD[closing]} ile borç kapama</b>
+          <span className="text-muted">Kapatılacakları soldan işaretleyin; her birine bugünkü borcu kadar ödeme yazılır.</span>
+          <label className="flex items-center gap-1.5">
+            Tarih <input type="date" className="input w-40" value={date} onChange={(e) => setDate(e.target.value)} />
+          </label>
+          <span className="ml-auto">
+            {pickedRows.length} tedarikçi · <b>{formatTL(pickedSum)}</b>
+          </span>
+          <button className="btn" onClick={stop}>
+            Vazgeç
+          </button>
+          <button className="btn btn-primary" disabled={!pickedRows.length || !date} onClick={() => setConfirm(true)}>
+            Execute
+          </button>
+        </div>
+      )}
       <div className="card overflow-hidden">
         <table className="tbl">
           <thead>
             <tr>
+              {closing && (
+                <th className="w-8">
+                  <input
+                    type="checkbox"
+                    aria-label="Tümünü seç"
+                    checked={allPicked}
+                    onChange={(e) => setPicked(e.target.checked ? new Set(rows.map((s) => s.id)) : new Set())}
+                  />
+                </th>
+              )}
               <th>Tedarikçi</th>
               <th>Tür</th>
               <th>VKN / TCKN</th>
@@ -217,8 +293,13 @@ export function SuppliersCariPage() {
             </tr>
           </thead>
           <tbody>
-            {data?.map((s) => (
-              <tr key={s.id} className="clickable" onClick={() => go(`/tedarikciler/${s.id}`)}>
+            {rows.map((s) => (
+              <tr key={s.id} className={`clickable ${closing && picked.has(s.id) ? 'bg-brand/5' : ''}`} onClick={() => (closing ? toggle(s.id) : go(`/tedarikciler/${s.id}`))}>
+                {closing && (
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <input type="checkbox" aria-label={`${s.name} seç`} checked={picked.has(s.id)} onChange={() => toggle(s.id)} />
+                  </td>
+                )}
                 <td className="font-medium">{s.name}</td>
                 <td className="text-sm text-muted">
                   {SUPPLIER_KIND[s.kind]} · {COST_TYPE_LABEL[s.costType]}
@@ -230,8 +311,33 @@ export function SuppliersCariPage() {
             ))}
           </tbody>
         </table>
-        {data && !data.length && <Empty>Tedarikçi yok.</Empty>}
+        {data && !rows.length && <Empty>{onlyDebt || closing ? 'Borçlu olduğumuz tedarikçi yok.' : 'Tedarikçi yok.'}</Empty>}
       </div>
+      {confirm && closing && (
+        <Confirm
+          title="Borçları kapat"
+          yes="Execute"
+          text={
+            <>
+              {trDate(date)} tarihli, <b>{PAY_METHOD[closing]}</b> ile {pickedRows.length} tedarikçiye toplam <b>{formatTL(pickedSum)}</b> ödeme yazılacak:
+              <ul className="mt-2 max-h-48 list-disc overflow-y-auto pl-5 text-sm">
+                {pickedRows.map((s) => (
+                  <li key={s.id}>
+                    {s.name}: {formatTL(s.balance)}
+                  </li>
+                ))}
+              </ul>
+            </>
+          }
+          onYes={async () => {
+            const r = await api.paySuppliersBulk({ supplierIds: pickedRows.map((s) => s.id), method: closing, date });
+            toast(`${r.paid.length} tedarikçinin borcu kapatıldı · ${formatTL(r.total)}${r.skipped.length ? ` · ${r.skipped.length} tanesinde borç yoktu` : ''}`);
+            stop();
+            reload();
+          }}
+          onClose={() => setConfirm(false)}
+        />
+      )}
     </Page>
   );
 }

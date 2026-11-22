@@ -178,6 +178,27 @@ describe('EDM e-fatura ve cari', () => {
     await expect(req('POST', '/api/e-invoices', { direction: 'out', date: '2026-11-08', subtotal: 1, vatTotal: 0 })).rejects.toMatchObject({ status: 400 });
   });
 
+  it('toplu borç kapama: havale / kredi kartı, yalnız borçlu olduklarımız', async () => {
+    const a = await req('POST', '/api/suppliers', { name: 'Kısmet Matbaa', kind: 'local', costType: 'invoice' });
+    const b = await req('POST', '/api/suppliers', { name: 'Trend Pleksi', kind: 'local', costType: 'invoice' });
+    const c = await req('POST', '/api/suppliers', { name: 'Borçsuz Kargo', kind: 'local', costType: 'invoice' });
+    await req('POST', '/api/e-invoices', { direction: 'in', date: '2026-11-08', supplierId: a.id, subtotal: 2987500, vatTotal: 597500 });
+    await req('POST', '/api/e-invoices', { direction: 'in', date: '2026-11-09', supplierId: b.id, subtotal: 3410000, vatTotal: 682000 });
+    const r = await req('POST', '/api/supplier-payments/bulk', { supplierIds: [a.id, b.id, c.id], method: 'kart', date: '2026-11-22' });
+    expect(r.total).toBe(3585000 + 4092000);
+    expect(r.paid.map((x: any) => x.supplierId).sort()).toEqual([a.id, b.id].sort());
+    expect(r.skipped).toEqual([{ supplierId: c.id, name: 'Borçsuz Kargo', balance: 0 }]);
+    const bal = await req<any[]>('GET', '/api/suppliers/balances');
+    for (const id of [a.id, b.id, c.id]) expect(bal.find((x) => x.id === id).balance).toBe(0);
+    const st = await req('GET', `/api/suppliers/${a.id}/statement`);
+    expect(st.rows.at(-1)).toMatchObject({ kind: 'payment', ref: 'kart', debit: 3585000, balance: 0 });
+    // ikinci kez: borç yok, ödeme yazılmaz
+    const again = await req('POST', '/api/supplier-payments/bulk', { supplierIds: [a.id], method: 'havale', date: '2026-11-22' });
+    expect(again.total).toBe(0);
+    await expect(req('POST', '/api/supplier-payments/bulk', { supplierIds: [], method: 'havale', date: '2026-11-22' })).rejects.toMatchObject({ status: 400 });
+    await expect(req('POST', '/api/supplier-payments/bulk', { supplierIds: [a.id], method: 'nakit', date: '2026-11-22' })).rejects.toMatchObject({ status: 400 });
+  });
+
   it('yanlış şifre anlaşılır hata verir', async () => {
     process.env.EDM_PASSWORD = 'yanlis';
     const r = await app.inject({ method: 'POST', url: '/api/edm/sync', payload: { from: '2026-11-01', to: '2026-11-02' }, headers: { cookie } });

@@ -558,6 +558,9 @@ export const api = {
   supplierStatement: (id: number, o: { from?: string; to?: string } = {}) => req<SupplierStatement>('GET', `/api/suppliers/${id}/statement${qs(o)}`),
   addSupplierPayment: (b: { supplierId: number; date: string; amount: number; method: PayMethod; reference?: string | null; note?: string | null }) => req<{ id: number }>('POST', '/api/supplier-payments', b),
   deleteSupplierPayment: (id: number) => req('DELETE', `/api/supplier-payments/${id}`),
+  paySuppliersBulk: (b: { supplierIds: number[]; method: 'havale' | 'kart'; date: string; note?: string | null }) =>
+    req<{ paid: { supplierId: number; name: string; amount: number; paymentId: number }[]; skipped: { supplierId: number; name: string; balance: number }[]; total: number }>(
+      'POST', '/api/supplier-payments/bulk', b),
   addAdjustment: (b: { customerId?: number; supplierId?: number; date: string; targetBalance?: number; amount?: number; note?: string | null }) =>
     req<{ id?: number; amount: number }>('POST', '/api/adjustments', b),
   deleteAdjustment: (id: number) => req('DELETE', `/api/adjustments/${id}`),

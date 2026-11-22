@@ -86,6 +86,40 @@ export function registerCari(app: FastifyInstance, { db, edmFetcher }: { db: Db;
     );
     return r;
   });
+  // Toplu borç kapama: seçilen tedarikçilerin o anki borcu kadar ödeme (havale ya da kredi kartı) tek işlemde
+  app.post('/api/supplier-payments/bulk', async (req) => {
+    const b = z
+      .object({
+        supplierIds: z.array(z.number().int().positive()).min(1, 'Tedarikçi seçin').max(500),
+        method: z.enum(['havale', 'kart']),
+        date: daySchema,
+        note: optText(300),
+      })
+      .parse(req.body);
+    const ids = [...new Set(b.supplierIds)];
+    return db.tx(async (t) => {
+      const rows = await t.query<{ id: number; name: string; balance: number }>(
+        `SELECT s.id, s.name, ${SUPPLIER_BALANCE_SQL} balance FROM suppliers s WHERE s.id = ANY($1::int[]) ORDER BY s.name`,
+        [ids],
+      );
+      if (rows.length !== ids.length) throw fail(404, 'Tedarikçi bulunamadı');
+      const paid: { supplierId: number; name: string; amount: number; paymentId: number }[] = [];
+      const skipped: { supplierId: number; name: string; balance: number }[] = [];
+      for (const s of rows) {
+        const amount = Math.round(Number(s.balance));
+        if (amount <= 0) {
+          skipped.push({ supplierId: s.id, name: s.name, balance: amount }); // borcumuz yok: dokunulmaz
+          continue;
+        }
+        const [r] = await t.query<{ id: number }>(
+          'INSERT INTO supplier_payments(supplier_id, date, amount, method, reference, note) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
+          [s.id, b.date, amount, b.method, 'Toplu kapama', b.note],
+        );
+        paid.push({ supplierId: s.id, name: s.name, amount, paymentId: r.id });
+      }
+      return { paid, skipped, total: paid.reduce((t, x) => t + x.amount, 0) };
+    });
+  });
   app.delete('/api/supplier-payments/:id', async (req) => {
     await db.query('DELETE FROM supplier_payments WHERE id = $1', [idParam(req.params)]);
     return { ok: true };
